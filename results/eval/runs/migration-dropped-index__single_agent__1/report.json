@@ -1,0 +1,318 @@
+{
+ "status": "conclusive",
+ "summary": "Deploy dep-0414 (sha 200f96f7, 18:54:00Z) added migration 0007, which dropped the composite index ix_transactions_user_created on transactions(user_id, created_at). Both slow routes filter by user_id and use created_at, so they lost their index. GET /transactions fell from about 13\u201317 ms to 1.7\u20133 s, and GET /summary from about 24\u201335 ms to 1.2\u20133.2 s. p95 jumped from about 750 ms to about 3150 ms at 18:55Z. Recreate the index (CREATE INDEX CONCURRENTLY) or revert the migration. I did not directly confirm the index is missing in the database, and I did not capture a query plan.",
+ "root_cause": {
+  "service": "fivo-api",
+  "component": "migrations/versions/0007_drop_unused_indexes.py: drop of ix_transactions_user_created on transactions(user_id, created_at)",
+  "category": "code_regression",
+  "summary": "Deploy dep-0414 ran a migration that dropped ix_transactions_user_created, judged 'unused' from idx_scan=0 since the last stats reset. That index serves the per-user queries behind the transaction list (list_recent: WHERE user_id ORDER BY created_at DESC LIMIT) and the monthly summary (monthly_totals: WHERE user_id AND created_at >= month_start). Without it those queries slowed from tens of milliseconds to seconds, which pushed p95 above 2 s at about 18:55Z, one minute after the deploy."
+ },
+ "what_changed": {
+  "what_changed": "The deploy dropped the composite index ix_transactions_user_created (and ix_receipts_content_type) via migration 0007, and removed the Index from the Transaction model.",
+  "changed_at": "2026-11-10T18:54:00Z",
+  "why_not_earlier": "",
+  "before": {
+   "statement": "Before the deploy, p95 was about 750 ms (5-minute points of 480\u2013950 ms). GET /transactions took 13\u201317 ms and GET /summary took 22\u201335 ms.",
+   "evidence_ids": [
+    "metric:fivo-api:0001",
+    "log:fivo-api:0014",
+    "log:fivo-api:0015",
+    "log:fivo-api:0010",
+    "log:fivo-api:0012"
+   ]
+  },
+  "after": {
+   "statement": "After the deploy, p95 was about 3150 ms (level shift at 18:55Z). GET /transactions took 1.7\u20133 s, and GET /summary took 1.2\u20133.2 s. POST /transactions stayed at 13\u201316 ms. CPU did not change.",
+   "evidence_ids": [
+    "metric:fivo-api:0001",
+    "log:fivo-api:0002",
+    "log:fivo-api:0003",
+    "log:fivo-api:0004",
+    "log:fivo-api:0006",
+    "log:fivo-api:0008",
+    "log:fivo-api:0005",
+    "metric:fivo-api:0002"
+   ]
+  }
+ },
+ "hypotheses": [
+  {
+   "id": "H1",
+   "rank": 1,
+   "statement": "Dropping ix_transactions_user_created in migration 0007 (dep-0414) forced slow queries for the per-user transaction list and monthly summary.",
+   "service": "fivo-api",
+   "category": "code_regression",
+   "confidence": 0.88,
+   "verdict": "most_likely",
+   "supporting": [
+    {
+     "statement": "The deploy landed at 18:54Z and the p95 level shift is at 18:55Z.",
+     "evidence_ids": [
+      "deploy:fivo-api:0001",
+      "metric:fivo-api:0001"
+     ]
+    },
+    {
+     "statement": "The diff removes the index on (user_id, created_at) from the model and drops it in migration 0007.",
+     "evidence_ids": [
+      "diff:fivo-api:0001",
+      "diff:fivo-api:0002"
+     ]
+    },
+    {
+     "statement": "The two slow routes run queries that filter on user_id and created_at, which this index would serve.",
+     "evidence_ids": [
+      "code:fivo-api:0001"
+     ]
+    },
+    {
+     "statement": "Latency was normal on both routes before the deploy and slow after. Writes (POST /transactions) were unaffected.",
+     "evidence_ids": [
+      "log:fivo-api:0014",
+      "log:fivo-api:0010",
+      "log:fivo-api:0002",
+      "log:fivo-api:0006",
+      "log:fivo-api:0005"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "I did not directly confirm the index is gone in the database and have no query plan. No traces were available.",
+     "evidence_ids": [
+      "trace:traces:0001"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H2",
+   "rank": 2,
+   "statement": "Resource exhaustion on the single 512 MB web instance (CPU, memory, connections).",
+   "service": "fivo-api",
+   "category": "resource_exhaustion",
+   "confidence": 0.04,
+   "verdict": "ruled_out",
+   "supporting": [],
+   "contradicting": [
+    {
+     "statement": "CPU was flat at 11\u201318% with no shift. Only the routes that use the dropped index slowed, and request volume did not rise.",
+     "evidence_ids": [
+      "metric:fivo-api:0002",
+      "logagg:fivo-api:0001"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H3",
+   "rank": 3,
+   "statement": "A configuration change or traffic increase caused the slowdown.",
+   "service": "fivo-api",
+   "category": "config_change",
+   "confidence": 0.02,
+   "verdict": "ruled_out",
+   "supporting": [],
+   "contradicting": [
+    {
+     "statement": "No configuration changes were recorded in the 24 hours before the incident.",
+     "evidence_ids": [
+      "config:config_changes:0001"
+     ]
+    },
+    {
+     "statement": "Log volume fell slightly against baseline (x0.9) rather than rising.",
+     "evidence_ids": [
+      "logagg:fivo-api:0001"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H4",
+   "rank": 4,
+   "statement": "A downstream dependency (Redis, worker, or an LLM API) is slow.",
+   "service": "fivo-api",
+   "category": "dependency_failure",
+   "confidence": 0.03,
+   "verdict": "ruled_out",
+   "supporting": [],
+   "contradicting": [
+    {
+     "statement": "The slow routes are plain database reads. The routes that call other services (/insights, quick-add, /voice/call) are not where the slowdown shows. Error rate is unchanged.",
+     "evidence_ids": [
+      "logagg:fivo-api:0001",
+      "log:fivo-api:0002",
+      "log:fivo-api:0006"
+     ]
+    }
+   ]
+  }
+ ],
+ "facts": [
+  {
+   "statement": "dep-0414 (sha 200f96f7, previous 7bc71c84, message 'migrations: drop indexes with zero scans') went live at 18:54:00Z.",
+   "evidence_ids": [
+    "deploy:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "The deploy changed only app/models.py and the new migration 0007_drop_unused_indexes.py.",
+   "evidence_ids": [
+    "changes:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "Migration 0007 drops ix_receipts_content_type and ix_transactions_user_created. Its comment says idx_scan = 0 since the last statistics reset. The model change removes Index('ix_transactions_user_created', user_id, created_at).",
+   "evidence_ids": [
+    "diff:fivo-api:0001",
+    "diff:fivo-api:0002"
+   ]
+  },
+  {
+   "statement": "p95 shifted from a mean of about 750 ms to about 3154 ms at 18:55Z and stayed high to 19:30Z (peak 3459 ms).",
+   "evidence_ids": [
+    "metric:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "list_recent filters on user_id and orders by created_at desc with a limit. monthly_totals filters on user_id and created_at >= month_start.",
+   "evidence_ids": [
+    "code:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "Before the deploy, GET /transactions took 13\u201317 ms and GET /summary took 22\u201335 ms.",
+   "evidence_ids": [
+    "log:fivo-api:0014",
+    "log:fivo-api:0015",
+    "log:fivo-api:0016",
+    "log:fivo-api:0010",
+    "log:fivo-api:0011",
+    "log:fivo-api:0012"
+   ]
+  },
+  {
+   "statement": "After the deploy, GET /transactions took 1731\u20133000 ms and GET /summary took 1216\u20133158 ms. POST /transactions stayed at 13\u201316 ms.",
+   "evidence_ids": [
+    "log:fivo-api:0002",
+    "log:fivo-api:0003",
+    "log:fivo-api:0004",
+    "log:fivo-api:0006",
+    "log:fivo-api:0007",
+    "log:fivo-api:0008",
+    "log:fivo-api:0009",
+    "log:fivo-api:0005"
+   ]
+  },
+  {
+   "statement": "CPU showed no level shift (11.5\u201318.4%).",
+   "evidence_ids": [
+    "metric:fivo-api:0002"
+   ]
+  },
+  {
+   "statement": "No configuration changes were recorded in the window, and no past incidents mention indexes.",
+   "evidence_ids": [
+    "config:config_changes:0001",
+    "incident:incidents:0001"
+   ]
+  }
+ ],
+ "assumptions": [
+  "The migration ran successfully at deploy time and the index is actually absent in Neon. This is inferred from the deploy and the matching latency shift, not queried directly.",
+  "The slowdown is a sequential or poorly-indexed scan on transactions. No EXPLAIN output or trace spans were available.",
+  "idx_scan=0 was probably misleading, for example because pg_stat counters had been reset recently or the stats window was short. This was not verified.",
+  "The log lines I sampled are representative of the whole window. The log fetches were partial and capped."
+ ],
+ "recommended_actions": [
+  {
+   "action": "Recreate the index now: CREATE INDEX CONCURRENTLY ix_transactions_user_created ON transactions (user_id, created_at). Also revert or supersede migration 0007 and the models.py change so the index is not dropped again.",
+   "rationale": "This restores the access path used by the transaction list and the monthly summary.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "diff:fivo-api:0001",
+    "diff:fivo-api:0002",
+    "code:fivo-api:0001"
+   ]
+  },
+  {
+   "action": "Confirm in Neon that the index is missing (pg_indexes) and run EXPLAIN on the list_recent and monthly_totals queries before and after the fix. Watch p95 return to below 1 s.",
+   "rationale": "This closes the gap that the drop was never confirmed directly and no query plan was captured.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "metric:fivo-api:0001"
+   ]
+  },
+  {
+   "action": "Review ix_receipts_content_type as well. Check that no receipts query depends on it, or restore it if one does.",
+   "rationale": "It was dropped in the same migration on the same unreliable idx_scan=0 reasoning. Its impact was not examined.",
+   "priority": "soon",
+   "evidence_ids": [
+    "diff:fivo-api:0002"
+   ]
+  },
+  {
+   "action": "Require evidence beyond idx_scan=0 for index-drop migrations. That means checking how long the stats have been collected, reading the code for queries that use the index, and testing on production-sized data.",
+   "rationale": "The index looked unused only because of the stats window, but the code uses it.",
+   "priority": "later",
+   "evidence_ids": [
+    "diff:fivo-api:0002",
+    "code:fivo-api:0001"
+   ]
+  }
+ ],
+ "missing_evidence": [
+  "I did not query the database catalog (pg_indexes, pg_stat_user_indexes), so the absence of the index is not directly confirmed. The db_query tool exposes only application tables.",
+  "No trace spans were found for the sampled slow request (trace 85d9da041d494513), so I have no per-span timing.",
+  "Log fetches were partial and capped, so I could not compute per-route latency statistics.",
+  "I did not check why idx_scan was 0, such as when the stats were last reset.",
+  "I did not check the impact of dropping ix_receipts_content_type."
+ ],
+ "changes_considered": [
+  {
+   "change": "fivo-api deploy dep-0414, sha 200f96f7: migration 0007 drops ix_transactions_user_created and ix_receipts_content_type, and models.py removes the index",
+   "when": "2026-11-10T18:54:00Z",
+   "timing": "",
+   "disposition": "cause",
+   "reason": "This is the only change in the window. Latency shifted one minute later, and the dropped index matches the filters and ordering of the two slow queries.",
+   "evidence_ids": [
+    "deploy:fivo-api:0001",
+    "diff:fivo-api:0001",
+    "diff:fivo-api:0002",
+    "metric:fivo-api:0001",
+    "code:fivo-api:0001"
+   ]
+  },
+  {
+   "change": "Configuration, environment variable and feature flag changes (any service)",
+   "when": "2026-11-09T18:00:00Z",
+   "timing": "",
+   "disposition": "ruled_out",
+   "reason": "No configuration changes were recorded between 2026-11-09T18:00Z and 2026-11-10T19:35Z.",
+   "evidence_ids": [
+    "config:config_changes:0001"
+   ]
+  }
+ ],
+ "why_now_evidenced": true,
+ "citations": {
+  "cited": 67,
+  "invalid": 0,
+  "facts_demoted": 0
+ },
+ "meta": {
+  "system": "single_agent",
+  "termination": "agent finished",
+  "tool_calls": 20,
+  "tool_failures": 0,
+  "guardrail_rejections": 2,
+  "evidence_records": 38,
+  "llm_calls": 7,
+  "input_tokens": 117009,
+  "output_tokens": 6905,
+  "total_tokens": 123914,
+  "cost_usd": 0.1207,
+  "latency_s": 63.3
+ }
+}

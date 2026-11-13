@@ -1,0 +1,44 @@
+{
+ "scenario": "bulk-import-traffic-spike",
+ "system": "multi_agent",
+ "run": 1,
+ "tags": [
+  "misleading",
+  "multi_hop"
+ ],
+ "correct": true,
+ "accepted_as": "primary",
+ "service_match": true,
+ "category_match": true,
+ "conclusive": true,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 80,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 1.0,
+ "key_evidence_collected": 1.0,
+ "reported": {
+  "service": "fivo-api",
+  "category": "traffic_change",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "fivo-api",
+  "category": "traffic_change"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report identifies the same root cause: user 137's scripted POST /transactions flood exhausts the shared per-instance 240/min rate limiter window, causing 429s for other users, and it rules out the deploy.",
+ "tool_calls": 42,
+ "tool_failures": 0,
+ "guardrail_rejections": 1,
+ "llm_calls": 38,
+ "input_tokens": 451082,
+ "output_tokens": 45976,
+ "total_tokens": 497058,
+ "cost_usd": 1.0127,
+ "latency_s": 298.9,
+ "rounds": 2,
+ "max_hops": 4,
+ "termination": "accepted"
+}

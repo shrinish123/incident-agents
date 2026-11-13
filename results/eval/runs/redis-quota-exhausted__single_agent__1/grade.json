@@ -1,0 +1,44 @@
+{
+ "scenario": "redis-quota-exhausted",
+ "system": "single_agent",
+ "run": 1,
+ "tags": [
+  "misleading",
+  "multi_hop"
+ ],
+ "correct": true,
+ "accepted_as": "primary",
+ "service_match": true,
+ "category_match": true,
+ "conclusive": true,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 53,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 0.75,
+ "key_evidence_collected": 0.75,
+ "reported": {
+  "service": "upstash-redis",
+  "category": "resource_exhaustion",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "upstash-redis",
+  "category": "resource_exhaustion"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report identifies the Upstash Redis broker's 500,000 daily command quota being exhausted at ~17:25Z as the root cause, with the same downstream effects (API 503s on enqueue routes, worker unable to consume), matching the key.",
+ "tool_calls": 30,
+ "tool_failures": 0,
+ "guardrail_rejections": 2,
+ "llm_calls": 10,
+ "input_tokens": 223578,
+ "output_tokens": 9756,
+ "total_tokens": 233334,
+ "cost_usd": 0.1845,
+ "latency_s": 208.9,
+ "rounds": null,
+ "max_hops": null,
+ "termination": "agent finished"
+}

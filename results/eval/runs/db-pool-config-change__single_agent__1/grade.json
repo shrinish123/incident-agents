@@ -1,0 +1,44 @@
+{
+ "scenario": "db-pool-config-change",
+ "system": "single_agent",
+ "run": 1,
+ "tags": [
+  "misleading",
+  "multi_hop"
+ ],
+ "correct": true,
+ "accepted_as": "primary",
+ "service_match": true,
+ "category_match": true,
+ "conclusive": true,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 40,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 0.8,
+ "key_evidence_collected": 0.8,
+ "reported": {
+  "service": "fivo-api",
+  "category": "config_change",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "fivo-api",
+  "category": "config_change"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report names cfg-0139 lowering DB_POOL_SIZE from 10 to 2 with max_overflow 0 and a 5 s pool timeout, causing QueuePool timeouts and 500s, which matches the key's root cause and mechanism.",
+ "tool_calls": 12,
+ "tool_failures": 0,
+ "guardrail_rejections": 0,
+ "llm_calls": 5,
+ "input_tokens": 80160,
+ "output_tokens": 4817,
+ "total_tokens": 84977,
+ "cost_usd": 0.0884,
+ "latency_s": 39.2,
+ "rounds": null,
+ "max_hops": null,
+ "termination": "agent finished"
+}

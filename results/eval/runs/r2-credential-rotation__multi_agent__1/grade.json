@@ -1,0 +1,44 @@
+{
+ "scenario": "r2-credential-rotation",
+ "system": "multi_agent",
+ "run": 1,
+ "tags": [
+  "conflicting",
+  "multi_hop"
+ ],
+ "correct": true,
+ "accepted_as": "primary",
+ "service_match": true,
+ "category_match": true,
+ "conclusive": true,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 72,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 1.0,
+ "key_evidence_collected": 1.0,
+ "reported": {
+  "service": "fivo-worker",
+  "category": "config_change",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "fivo-worker",
+  "category": "config_change"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report identifies the same root cause: the R2 key rotation (cfg-0139) was applied to fivo-api but not fivo-worker, and the worker's 403s began when the old key's grace period ended.",
+ "tool_calls": 36,
+ "tool_failures": 0,
+ "guardrail_rejections": 0,
+ "llm_calls": 34,
+ "input_tokens": 433943,
+ "output_tokens": 27699,
+ "total_tokens": 461642,
+ "cost_usd": 0.5429,
+ "latency_s": 925.2,
+ "rounds": 1,
+ "max_hops": 3,
+ "termination": "accepted"
+}

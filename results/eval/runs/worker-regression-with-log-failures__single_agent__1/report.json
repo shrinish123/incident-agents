@@ -1,0 +1,279 @@
+{
+ "status": "conclusive",
+ "summary": "The fivo-worker deploy dep-0414 (sha 732a2a8a, 12:21Z) made `time_features()` call `ZoneInfo(txn.merchant_tz)`. Every manual transaction, including all quick-add ones, has `merchant_tz` NULL, so `categorize_transaction` now raises TypeError. Quick-add waits for the worker result, so the API fails validating the response and returns 500. Plain card transactions carry a timezone and are unaffected. Roll back fivo-worker to 994ebf05, or make `time_features` fall back to UTC when `merchant_tz` is NULL. Then re-queue categorisation for the failed jobs.",
+ "root_cause": {
+  "service": "fivo-worker",
+  "component": "worker/features.py time_features() (ZoneInfo(txn.merchant_tz)) in deploy dep-0414, sha 732a2a8a",
+  "category": "code_regression",
+  "summary": "Deploy dep-0414 changed `time_features` to convert `created_at` with `ZoneInfo(txn.merchant_tz)` and has no handling for NULL. Manual/quick-add transactions always have a NULL `merchant_tz`, so `categorize_transaction` fails with TypeError and leaves them uncategorised. The API's quick-add waits on that result, hits a pydantic validation error because `category` is not a string, and returns 500."
+ },
+ "hypotheses": [
+  {
+   "id": "H1",
+   "rank": 1,
+   "statement": "Worker deploy dep-0414 introduced a NULL-timezone crash in categorisation. Manual/quick-add transactions have a NULL merchant_tz, so categorisation fails and quick-add returns 500.",
+   "service": "fivo-worker",
+   "category": "code_regression",
+   "confidence": 0.95,
+   "verdict": "most_likely",
+   "supporting": [
+    {
+     "statement": "The diff replaces `txn.created_at.hour` with `created_at.astimezone(ZoneInfo(txn.merchant_tz))`. `ZoneInfo(None)` raises exactly this TypeError.",
+     "evidence_ids": [
+      "diff:fivo-worker:0001"
+     ]
+    },
+    {
+     "statement": "Worker errors begin at 12:21:20Z, right after the 12:21Z deploy. The message is TypeError('expected str, bytes or os.PathLike object, not NoneType').",
+     "evidence_ids": [
+      "deploy:fivo-worker:0001",
+      "log:fivo-worker:0001",
+      "logagg:fivo-worker:0001"
+     ]
+    },
+    {
+     "statement": "57 jobs have failed with this TypeError and none have failed otherwise. 189 jobs succeeded.",
+     "evidence_ids": [
+      "db:jobs:0001"
+     ]
+    },
+    {
+     "statement": "Since 12:21Z, 57 of 58 NULL-tz transactions are uncategorised, while all transactions with a timezone are categorised.",
+     "evidence_ids": [
+      "db:transactions:0001"
+     ]
+    },
+    {
+     "statement": "All 58 manual-source transactions after the deploy have NULL tz. All 126 manual transactions before the deploy also had NULL tz, and card transactions always had a tz.",
+     "evidence_ids": [
+      "db:transactions:0002",
+      "db:transactions:0003"
+     ]
+    },
+    {
+     "statement": "The API quick-add 500 at 12:21:20Z has the same trace_id (802cc1a662e685cb) as the first worker failure. The error is a pydantic ValidationError because `category` is not a string.",
+     "evidence_ids": [
+      "log:fivo-api:0001",
+      "log:fivo-worker:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "The API also logged unrelated ConnectionResetError 500s on GET /summary and /transactions. These look like background noise (a connection reset) and do not explain the quick-add failures. I did not investigate them.",
+     "evidence_ids": [
+      "log:fivo-api:0002",
+      "log:fivo-api:0003"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H2",
+   "rank": 2,
+   "statement": "A dependency failure (Groq, Redis or Neon) is breaking categorisation.",
+   "service": "groq-llm",
+   "category": "dependency_failure",
+   "confidence": 0.03,
+   "verdict": "ruled_out",
+   "supporting": [],
+   "contradicting": [
+    {
+     "statement": "The failure is a local TypeError, not a timeout or an HTTP error. Jobs for transactions with a timezone succeed, which a dependency outage would not allow.",
+     "evidence_ids": [
+      "db:jobs:0001",
+      "db:transactions:0001"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H3",
+   "rank": 3,
+   "statement": "A configuration change caused the failures.",
+   "service": "fivo-api",
+   "category": "config_change",
+   "confidence": 0.02,
+   "verdict": "ruled_out",
+   "supporting": [],
+   "contradicting": [
+    {
+     "statement": "No config changes were recorded in the 24h before the incident.",
+     "evidence_ids": [
+      "config:config_changes:0001"
+     ]
+    }
+   ]
+  }
+ ],
+ "facts": [
+  {
+   "statement": "The only deploy in the prior day was fivo-worker dep-0414 at 12:21Z, 'features: use the merchant's local time of day'.",
+   "evidence_ids": [
+    "deploy:fivo-worker:0001"
+   ]
+  },
+  {
+   "statement": "The diff touches only worker/features.py and calls ZoneInfo(txn.merchant_tz) with no NULL guard.",
+   "evidence_ids": [
+    "diff:fivo-worker:0001"
+   ]
+  },
+  {
+   "statement": "Worker categorize_transaction errors start at 12:21:20Z. The worker logged 11 errors in the 12:20 bucket and 5 to 16 in each later 10-minute bucket. These counts are lower bounds because the fetch was partial.",
+   "evidence_ids": [
+    "logagg:fivo-worker:0001",
+    "log:fivo-worker:0001"
+   ]
+  },
+  {
+   "statement": "57 jobs failed with the TypeError and 189 succeeded since 12:00Z.",
+   "evidence_ids": [
+    "db:jobs:0001"
+   ]
+  },
+  {
+   "statement": "Transactions with a NULL merchant_tz are uncategorised (57 of 58), while those with a tz are fine.",
+   "evidence_ids": [
+    "db:transactions:0001"
+   ]
+  },
+  {
+   "statement": "Manual transactions always had a NULL tz, both before and after the deploy. The old code never used the timezone, so they were categorised fine.",
+   "evidence_ids": [
+    "db:transactions:0002",
+    "db:transactions:0003"
+   ]
+  },
+  {
+   "statement": "The quick-add 500 shares trace 802cc1a662e685cb with the worker failure.",
+   "evidence_ids": [
+    "log:fivo-api:0001",
+    "log:fivo-worker:0001"
+   ]
+  }
+ ],
+ "assumptions": [
+  "quick-add is the main path that creates manual transactions with a NULL tz and waits for the worker. This comes from the topology notes and the correlation between manual source and NULL tz. I did not read the API code.",
+  "ZoneInfo(None) is what produces the TypeError message. This is inferred from the diff and the message text. I did not run it.",
+  "About a third of quick-add calls fail rather than all of them. I did not establish why, for example whether some requests supply a tz or use another source."
+ ],
+ "recommended_actions": [
+  {
+   "action": "Roll back fivo-worker to 994ebf056196cf1b944f9f8e4cdc0c7419d7b0bc, or hotfix `time_features` to fall back to UTC when `merchant_tz` is None or invalid.",
+   "rationale": "This stops the TypeError for all manual and quick-add transactions.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "diff:fivo-worker:0001",
+    "db:jobs:0001"
+   ]
+  },
+  {
+   "action": "Re-run categorisation for the failed jobs and the transactions with category_id NULL since 12:21Z.",
+   "rationale": "At least 57 transactions are uncategorised and their jobs are in status failed.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "db:jobs:0001",
+    "db:transactions:0001"
+   ]
+  },
+  {
+   "action": "Make the API return a clear fallback, such as an uncategorised result, when the worker fails. Make `TransactionOut.category` tolerate None.",
+   "rationale": "A worker categorisation failure should not turn quick-add into a 500.",
+   "priority": "soon",
+   "evidence_ids": [
+    "log:fivo-api:0001"
+   ]
+  },
+  {
+   "action": "Add a test with merchant_tz=None to the worker's feature tests. Consider populating or defaulting merchant_tz for manual transactions.",
+   "rationale": "No test or review caught that the column is nullable and always NULL for manual entries.",
+   "priority": "later",
+   "evidence_ids": [
+    "db:transactions:0003"
+   ]
+  },
+  {
+   "action": "Look at the ConnectionResetError 500s on GET /summary and /transactions separately.",
+   "rationale": "They appear unrelated to this incident but were not explained.",
+   "priority": "later",
+   "evidence_ids": [
+    "log:fivo-api:0002",
+    "log:fivo-api:0003"
+   ]
+  }
+ ],
+ "missing_evidence": [
+  "The first fivo-api logs_count by route and status timed out. I did not get a per-route 5xx rate, so the 'about a third' figure is not independently confirmed.",
+  "The worker and API error log fetches were partial and truncated. Error counts are lower bounds.",
+  "The API code that handles quick-add and the worker's categorize_transaction task were not read. The path from the TypeError to the 500 is shown by the shared trace and the pydantic error, not by code.",
+  "The ConnectionResetError 500s on GET /summary and /transactions were not investigated."
+ ],
+ "what_changed": {
+  "what_changed": "fivo-worker began converting transaction time to the merchant's local timezone via ZoneInfo(txn.merchant_tz). That value is NULL for every manual/quick-add transaction.",
+  "changed_at": "2026-11-10T12:21:00Z",
+  "why_not_earlier": "The NULL merchant_tz data for manual transactions already existed, but the old code never read the timezone. The new code first dereferenced it at the 12:21Z deploy.",
+  "before": {
+   "statement": "`time_features` used `created_at.hour` and never read `merchant_tz`. Manual transactions with a NULL tz were categorised normally: 189 jobs succeeded with no failures before the deploy.",
+   "evidence_ids": [
+    "diff:fivo-worker:0001",
+    "db:transactions:0003",
+    "db:jobs:0001"
+   ]
+  },
+  "after": {
+   "statement": "From 12:21:20Z, categorize_transaction raises TypeError for NULL-tz transactions. 57 jobs failed, and 57 of 58 NULL-tz transactions are uncategorised. Quick-add returns 500 on the pydantic validation error.",
+   "evidence_ids": [
+    "log:fivo-worker:0001",
+    "db:jobs:0001",
+    "db:transactions:0001",
+    "log:fivo-api:0001"
+   ]
+  }
+ },
+ "changes_considered": [
+  {
+   "change": "fivo-worker deploy dep-0414, sha 732a2a8a, 'features: use the merchant's local time of day'",
+   "when": "2026-11-10T12:21:00Z",
+   "timing": "",
+   "disposition": "cause",
+   "reason": "It introduces ZoneInfo(txn.merchant_tz) with no NULL handling. Errors start 20 seconds after the deploy, and the failures map exactly to NULL-tz transactions.",
+   "evidence_ids": [
+    "deploy:fivo-worker:0001",
+    "diff:fivo-worker:0001",
+    "log:fivo-worker:0001",
+    "db:jobs:0001"
+   ]
+  },
+  {
+   "change": "Configuration, environment variable and feature-flag changes (all services)",
+   "when": "2026-11-09T12:00:00Z",
+   "timing": "",
+   "disposition": "ruled_out",
+   "reason": "The tool returned no config changes in the 24h window before the incident.",
+   "evidence_ids": [
+    "config:config_changes:0001"
+   ]
+  }
+ ],
+ "why_now_evidenced": true,
+ "citations": {
+  "cited": 45,
+  "invalid": 0,
+  "facts_demoted": 0
+ },
+ "meta": {
+  "system": "single_agent",
+  "termination": "agent finished",
+  "tool_calls": 15,
+  "tool_failures": 1,
+  "guardrail_rejections": 1,
+  "evidence_records": 24,
+  "llm_calls": 7,
+  "input_tokens": 97894,
+  "output_tokens": 6000,
+  "total_tokens": 103894,
+  "cost_usd": 0.0932,
+  "latency_s": 289.3
+ }
+}

@@ -1,0 +1,44 @@
+{
+ "scenario": "voice-errors-missing-telemetry",
+ "system": "multi_agent",
+ "run": 1,
+ "tags": [
+  "tool_failure",
+  "inconclusive_ok"
+ ],
+ "correct": true,
+ "accepted_as": "primary",
+ "service_match": true,
+ "category_match": true,
+ "conclusive": false,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 75,
+ "facts_demoted": 0,
+ "why_now_evidenced": false,
+ "key_evidence_recall": 1.0,
+ "key_evidence_collected": 1.0,
+ "reported": {
+  "service": "bolna-voice",
+  "category": "dependency_failure",
+  "status": "inconclusive"
+ },
+ "expected": {
+  "service": "bolna-voice",
+  "category": "dependency_failure"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report identifies the bolna-voice dependency as the likely failure (502s and 10 s timeouts on the outbound call, no deploys), says Bolna's side versus the network path cannot be separated, and names the missing traces and metrics, which matches the key's inconclusive-acceptable outcome.",
+ "tool_calls": 83,
+ "tool_failures": 8,
+ "guardrail_rejections": 4,
+ "llm_calls": 68,
+ "input_tokens": 874947,
+ "output_tokens": 65153,
+ "total_tokens": 940100,
+ "cost_usd": 1.5133,
+ "latency_s": 1181.0,
+ "rounds": 3,
+ "max_hops": 6,
+ "termination": "round limit reached"
+}

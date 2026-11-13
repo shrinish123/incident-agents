@@ -1,0 +1,309 @@
+{
+ "status": "conclusive",
+ "summary": "At 08:57:00Z the env var ANTHROPIC_TIMEOUT_S on fivo-api was lowered from 20 to 2 seconds (cfg-0139). Normal Anthropic insight calls take about 1\u20133.5 s, with occasional outliers near 8 s, so a large share of calls now exceed 2 s and are cut off as UpstreamTimeout, which returns 504 on GET /insights. The first 504 was at 08:58:22Z, with none before 08:58Z. The 09:00Z deploy (371cb6a) is a behaviour-neutral refactor and is not the cause. Immediate action: revert ANTHROPIC_TIMEOUT_S to 20 or another value comfortably above p99 Anthropic latency.",
+ "root_cause": {
+  "service": "fivo-api",
+  "component": "ANTHROPIC_TIMEOUT_S env var (cfg-0139), used as anthropic_timeout_s in app/config.py",
+  "category": "config_change",
+  "summary": "ANTHROPIC_TIMEOUT_S was cut from 20 s to 2 s at 08:57Z. Insight generation via Anthropic normally takes about 1\u20133.5 s and sometimes more, so many calls now hit the 2 s client timeout and raise UpstreamTimeout. GET /insights then returns 504 for roughly half of requests while other routes stay healthy."
+ },
+ "hypotheses": [
+  {
+   "id": "H1",
+   "rank": 1,
+   "statement": "The ANTHROPIC_TIMEOUT_S reduction from 20 to 2 s truncates normal-latency Anthropic calls and produces 504s.",
+   "service": "fivo-api",
+   "category": "config_change",
+   "confidence": 0.93,
+   "verdict": "most_likely",
+   "supporting": [
+    {
+     "statement": "The env var change was made at 08:57:00Z, 20 \u2192 2, note 'fail fast'.",
+     "evidence_ids": [
+      "config:fivo-api:0001"
+     ]
+    },
+    {
+     "statement": "Errors read 'anthropic request timed out after 2.0s', with duration of about 2021\u20132025 ms, and the first is at 08:58:22Z.",
+     "evidence_ids": [
+      "log:fivo-api:0011",
+      "log:fivo-api:0014",
+      "log:fivo-api:0015",
+      "log:fivo-api:0017",
+      "log:fivo-api:0018"
+     ]
+    },
+    {
+     "statement": "There were zero 504s on /insights from 08:00 to 08:58Z.",
+     "evidence_ids": [
+      "logagg:fivo-api:0003"
+     ]
+    },
+    {
+     "statement": "Before the change, successful /insights calls routinely took 1\u20133.5 s, and one took 7.9 s. Many of these would exceed a 2 s limit.",
+     "evidence_ids": [
+      "log:fivo-api:0020",
+      "log:fivo-api:0024",
+      "log:fivo-api:0025",
+      "log:fivo-api:0027",
+      "log:fivo-api:0037",
+      "log:fivo-api:0001"
+     ]
+    },
+    {
+     "statement": "After the change, 504s and 200s are mixed in every 5-minute bucket (about 3\u20136 of 7\u201311 requests are 504).",
+     "evidence_ids": [
+      "logagg:fivo-api:0002"
+     ]
+    },
+    {
+     "statement": "The code default is 20.0 s, so the 2 s value comes only from the env override.",
+     "evidence_ids": [
+      "codehit:fivo-api:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "Successful requests continued after the change, but they were all under 2 s, which is consistent with a threshold effect rather than contradicting it.",
+     "evidence_ids": [
+      "log:fivo-api:0012",
+      "log:fivo-api:0013",
+      "log:fivo-api:0016"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H2",
+   "rank": 2,
+   "statement": "Deploy dep-0414 (371cb6a) changed prompt building or the request and caused the failures.",
+   "service": "fivo-api",
+   "category": "code_regression",
+   "confidence": 0.05,
+   "verdict": "ruled_out",
+   "supporting": [
+    {
+     "statement": "The deploy landed at 09:00Z, close to the onset, and its message says 'tune request'.",
+     "evidence_ids": [
+      "deploy:fivo-api:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "The diff only moves prompt construction into _build_prompt and makes MAX_TOKENS = 400, the same value as before. Prompt content and max_tokens are unchanged.",
+     "evidence_ids": [
+      "diff:fivo-api:0001"
+     ]
+    },
+    {
+     "statement": "Timeouts began at 08:58:22Z, before the deploy.",
+     "evidence_ids": [
+      "log:fivo-api:0011",
+      "log:fivo-api:0014"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H3",
+   "rank": 3,
+   "statement": "Anthropic upstream degradation or slowness caused the timeouts.",
+   "service": "anthropic-llm",
+   "category": "dependency_failure",
+   "confidence": 0.05,
+   "verdict": "ruled_out",
+   "supporting": [],
+   "contradicting": [
+    {
+     "statement": "Successful calls before the change had similar 1\u20133.5 s latency and no 504s, and the failures begin exactly after the timeout was lowered. Latency did not visibly shift, though I did not query Anthropic-side metrics.",
+     "evidence_ids": [
+      "logagg:fivo-api:0003",
+      "log:fivo-api:0020",
+      "log:fivo-api:0025"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H4",
+   "rank": 4,
+   "statement": "Resource exhaustion or DB or network problems on fivo-api.",
+   "service": "fivo-api",
+   "category": "resource_exhaustion",
+   "confidence": 0.03,
+   "verdict": "ruled_out",
+   "supporting": [
+    {
+     "statement": "There were two 500 ConnectionResetError events on /insights at 08:09 and 08:11Z.",
+     "evidence_ids": [
+      "logagg:fivo-api:0004",
+      "log:fivo-api:0031"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "Those two 500s were fast (about 21\u201325 ms), occurred before the incident, and are a different error from the 504 timeouts. Other routes are healthy.",
+     "evidence_ids": [
+      "log:fivo-api:0031",
+      "log:fivo-api:0035"
+     ]
+    }
+   ]
+  }
+ ],
+ "facts": [
+  {
+   "statement": "ANTHROPIC_TIMEOUT_S on fivo-api was changed from 20 to 2 at 08:57:00Z by dashboard:dev.",
+   "evidence_ids": [
+    "config:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "No /insights 504s occurred between 08:00 and 08:58Z.",
+   "evidence_ids": [
+    "logagg:fivo-api:0003"
+   ]
+  },
+  {
+   "statement": "504s on /insights began at 08:58:22Z with 'UpstreamTimeout: anthropic request timed out after 2.0s' and recurred in every 5-minute bucket through 09:30Z.",
+   "evidence_ids": [
+    "log:fivo-api:0011",
+    "logagg:fivo-api:0002"
+   ]
+  },
+  {
+   "statement": "Baseline successful /insights requests took roughly 0.9\u20133.5 s, with one at 7.9 s.",
+   "evidence_ids": [
+    "log:fivo-api:0020",
+    "log:fivo-api:0025",
+    "log:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "Deploy dep-0414 at 09:00Z only refactored prompt construction. MAX_TOKENS stays 400 and the prompt text is unchanged.",
+   "evidence_ids": [
+    "diff:fivo-api:0001",
+    "deploy:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "The code default for the timeout is 20.0 s.",
+   "evidence_ids": [
+    "codehit:fivo-api:0001"
+   ]
+  }
+ ],
+ "assumptions": [
+  "Anthropic call latency is about 1\u20133.5 s (the request duration is inferred from the /insights request duration, which includes DB work), so a 2 s timeout will truncate a large share of calls.",
+  "The env var change took effect on the running process at or shortly after 08:57Z (the first timeout is 08:58:22Z); the restart or reload was not directly observed.",
+  "Anthropic's own latency did not change; its provider-side metrics were not checked."
+ ],
+ "recommended_actions": [
+  {
+   "action": "Revert ANTHROPIC_TIMEOUT_S on fivo-api to 20, or to a value above p99 Anthropic latency (for example 10\u201315 s), and restart or reload the service.",
+   "rationale": "This removes the trigger. The error is a client-side timeout at 2.0 s on calls that normally take 1\u20133.5 s.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "config:fivo-api:0001",
+    "log:fivo-api:0011"
+   ]
+  },
+  {
+   "action": "Confirm recovery: /insights 504 count should drop to zero and p95 latency should return to the 08:00\u201308:55Z baseline.",
+   "rationale": "Verifies the mechanism.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "logagg:fivo-api:0002"
+   ]
+  },
+  {
+   "action": "Review timeout changes before applying them: derive them from measured upstream latency percentiles, and consider a separate, shorter timeout with a cached or fallback insight response if fail-fast behaviour is wanted.",
+   "rationale": "The change was made from the dashboard without a latency check, and the error returned to users is a hard 504.",
+   "priority": "soon",
+   "evidence_ids": [
+    "config:fivo-api:0001"
+   ]
+  },
+  {
+   "action": "Alert on the 504 rate for /insights and add Anthropic call latency metrics to fivo-api.",
+   "rationale": "No client-side latency metric for the Anthropic dependency was used in this investigation.",
+   "priority": "later",
+   "evidence_ids": []
+  }
+ ],
+ "missing_evidence": [
+  "No Anthropic-call-level latency histogram was available, so the share of calls over 2 s was inferred from request durations.",
+  "I did not check platform logs confirming when the env var change took effect (restart or reload).",
+  "The log counts are partial or capped in places, so counts are lower bounds. The 5-minute /insights counts were complete (status ok)."
+ ],
+ "what_changed": {
+  "what_changed": "The ANTHROPIC_TIMEOUT_S env var on fivo-api was lowered from 20 s to 2 s (cfg-0139).",
+  "changed_at": "2026-11-11T08:57:00Z",
+  "why_not_earlier": "",
+  "before": {
+   "statement": "With a 20 s timeout, /insights returned 200 in about 0.9\u20133.5 s (one at 7.9 s), with zero 504s between 08:00 and 08:58Z.",
+   "evidence_ids": [
+    "logagg:fivo-api:0003",
+    "log:fivo-api:0020",
+    "log:fivo-api:0025",
+    "log:fivo-api:0001"
+   ]
+  },
+  "after": {
+   "statement": "Anthropic calls over 2 s fail with 'UpstreamTimeout ... after 2.0s' and /insights returns 504 for about half of requests from 08:58:22Z.",
+   "evidence_ids": [
+    "log:fivo-api:0011",
+    "logagg:fivo-api:0002"
+   ]
+  }
+ },
+ "changes_considered": [
+  {
+   "change": "fivo-api env var ANTHROPIC_TIMEOUT_S 20 -> 2 (cfg-0139, by dashboard:dev)",
+   "when": "2026-11-11T08:57:00Z",
+   "timing": "",
+   "disposition": "cause",
+   "reason": "The timeout error message shows the 2.0 s limit, and 504s begin about 80 s after the change, with none before. Normal call latency of 1\u20133.5 s straddles the new limit.",
+   "evidence_ids": [
+    "config:fivo-api:0001",
+    "log:fivo-api:0011",
+    "logagg:fivo-api:0003"
+   ]
+  },
+  {
+   "change": "fivo-api deploy dep-0414 sha 371cb6a (prev 7bc71c8): insights prompt restructure",
+   "when": "2026-11-11T09:00:00Z",
+   "timing": "",
+   "disposition": "ruled_out",
+   "reason": "The diff is a behaviour-neutral refactor with max_tokens unchanged at 400. The 504s started at 08:58:22Z, before the deploy, and the error is the 2.0 s timeout from the env var.",
+   "evidence_ids": [
+    "diff:fivo-api:0001",
+    "deploy:fivo-api:0001",
+    "log:fivo-api:0011"
+   ]
+  }
+ ],
+ "why_now_evidenced": true,
+ "citations": {
+  "cited": 55,
+  "invalid": 0,
+  "facts_demoted": 0
+ },
+ "meta": {
+  "system": "single_agent",
+  "termination": "agent finished",
+  "tool_calls": 12,
+  "tool_failures": 0,
+  "guardrail_rejections": 0,
+  "evidence_records": 61,
+  "llm_calls": 5,
+  "input_tokens": 87047,
+  "output_tokens": 5948,
+  "total_tokens": 92995,
+  "cost_usd": 0.1349,
+  "latency_s": 43.7
+ }
+}

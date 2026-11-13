@@ -1,0 +1,44 @@
+{
+ "scenario": "bulk-import-traffic-spike",
+ "system": "single_agent",
+ "run": 1,
+ "tags": [
+  "misleading",
+  "multi_hop"
+ ],
+ "correct": true,
+ "accepted_as": "primary",
+ "service_match": true,
+ "category_match": true,
+ "conclusive": true,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 43,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 0.6,
+ "key_evidence_collected": 0.6,
+ "reported": {
+  "service": "fivo-api",
+  "category": "traffic_change",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "fivo-api",
+  "category": "traffic_change"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report identifies the same root cause: user 137 / cli-7f3a bulk POST /transactions at ~320/min exhausting the shared 240/min rate limiter window and causing 429s for others, and it correctly rules out the insights-prompt deploy.",
+ "tool_calls": 18,
+ "tool_failures": 0,
+ "guardrail_rejections": 0,
+ "llm_calls": 7,
+ "input_tokens": 118380,
+ "output_tokens": 6432,
+ "total_tokens": 124812,
+ "cost_usd": 0.1318,
+ "latency_s": 58.9,
+ "rounds": null,
+ "max_hops": null,
+ "termination": "agent finished"
+}

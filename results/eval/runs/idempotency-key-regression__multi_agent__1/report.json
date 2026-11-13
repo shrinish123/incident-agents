@@ -1,0 +1,447 @@
+{
+ "status": "conclusive",
+ "summary": "At 08:20:00Z deploy dep-0414 (commit ef5484e, 'idempotency: shorter keys') went live in fivo-api. It changed build_key from user_id:device_id:client_seq to user_id:client_seq. client_seq is a per-device counter, so a user's second device can now produce a key that already exists. That insert violates the global constraint uq_transactions_idempotency_key, and neither write route catches IntegrityError, so POST /transactions and POST /transactions/quick-add return 500. Roll back to 7bc71c8 now. The one inferred link is that the colliding rows come from another device; no failing request's key has been paired with an existing row.",
+ "root_cause": {
+  "service": "fivo-api",
+  "component": "app/services/idempotency.py build_key (dep-0414, ef5484e), with unique constraint uq_transactions_idempotency_key and unhandled IntegrityError on the write routes",
+  "category": "code_regression",
+  "summary": "The deploy dropped device_id from the idempotency key, while the replay check find_replay is still device-scoped and the DB constraint is global. Cross-device seq overlap for the same user now collides and surfaces as an unhandled UniqueViolation, returned as a 500."
+ },
+ "hypotheses": [
+  {
+   "id": "H1",
+   "rank": 1,
+   "statement": "Deploy dep-0414 (ef5484e) dropped device_id from the idempotency key, so keys collide across a user's devices and writes fail with an unhandled UniqueViolation (500).",
+   "service": "fivo-api",
+   "category": "code_regression",
+   "confidence": 0.9,
+   "verdict": "most_likely",
+   "supporting": [
+    {
+     "statement": "Deploy went live at 08:20:00Z and is the only deploy; no config changes were recorded.",
+     "evidence_ids": [
+      "deploy:fivo-api:0001",
+      "config:config_changes:0001"
+     ]
+    },
+    {
+     "statement": "The diff touches one file and one line: build_key lost device_id.",
+     "evidence_ids": [
+      "changes:fivo-api:0001",
+      "diff:fivo-api:0001"
+     ]
+    },
+    {
+     "statement": "The global unique constraint exists, find_replay is device-scoped, and neither route handles IntegrityError.",
+     "evidence_ids": [
+      "codehit:fivo-api:0001",
+      "code:fivo-api:0001",
+      "code:fivo-api:0002"
+     ]
+    },
+    {
+     "statement": "Sampled error lines are UniqueViolation on uq_transactions_idempotency_key, first at 08:22:31; 75 of 77 errors in 08:20-09:00 are of this type.",
+     "evidence_ids": [
+      "log:fivo-api:0007",
+      "log:fivo-api:0008",
+      "log:fivo-api:0009",
+      "logagg:fivo-api:0012"
+     ]
+    },
+    {
+     "statement": "All 111 rows saved from 08:20:20 use the short key and none use the old format; pre-deploy rows use user:device:seq.",
+     "evidence_ids": [
+      "db:transactions:0002",
+      "db:transactions:0004",
+      "db:transactions:0001"
+     ]
+    },
+    {
+     "statement": "10 post-08:20 rows across 9 users share user_id and client_seq with an earlier row from a different device, showing cross-device seq overlap is common.",
+     "evidence_ids": [
+      "db:transactions:0003"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "No failing request's key was paired with an existing row from another device; logs carry neither client_seq nor the key.",
+     "evidence_ids": [
+      "log:fivo-api:0007"
+     ]
+    },
+    {
+     "statement": "Only 77 error lines were classified (08:20-09:00) against 89 error lines in the wider window; the type of the remainder is unchecked.",
+     "evidence_ids": [
+      "logagg:fivo-api:0002",
+      "logagg:fivo-api:0007"
+     ]
+    },
+    {
+     "statement": "2 ConnectionResetError lines (one is GET /categories at 08:20:58) are unexplained but are not on the main failure path.",
+     "evidence_ids": [
+      "log:fivo-api:0006"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H2",
+   "rank": 2,
+   "statement": "A neon-postgres problem (suspended compute, pool exhaustion, slow or locked writes) is causing write timeouts, as in INC-2026-024.",
+   "service": "neon-postgres",
+   "category": "infrastructure",
+   "confidence": 0.02,
+   "verdict": "ruled_out",
+   "supporting": [
+    {
+     "statement": "A past incident had a 5xx spike on POST /transactions from a suspended DB compute.",
+     "evidence_ids": [
+      "incident:fivo-api:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "0 log lines matching QueuePool, OperationalError or connection refused from 08:20 to 09:00.",
+     "evidence_ids": [
+      "logagg:fivo-api:0008",
+      "logagg:fivo-api:0009",
+      "logagg:fivo-api:0010"
+     ]
+    },
+    {
+     "statement": "The 500s are fast (12-17 ms) UniqueViolations, so the database is up and rejecting duplicate keys.",
+     "evidence_ids": [
+      "log:fivo-api:0007",
+      "log:fivo-api:0008",
+      "log:fivo-api:0009"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H3",
+   "rank": 3,
+   "statement": "The Redis queue or fivo-worker path is failing, causing 500s on quick-add and transaction writes.",
+   "service": "upstash-redis",
+   "category": "dependency_failure",
+   "confidence": 0.02,
+   "verdict": "ruled_out",
+   "supporting": [
+    {
+     "statement": "quick-add waits on the worker through the Redis queue.",
+     "evidence_ids": [
+      "topology:fivo-api:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "0 lines matching 'redis' or 'timeout' in fivo-api from 08:20 to 09:00.",
+     "evidence_ids": [
+      "logagg:fivo-api:0004",
+      "logagg:fivo-api:0006"
+     ]
+    },
+    {
+     "statement": "fivo-worker logged no errors and had no deploys.",
+     "evidence_ids": [
+      "logagg:fivo-worker:0001",
+      "deploy:fivo-worker:0001"
+     ]
+    },
+    {
+     "statement": "The observed errors are Postgres unique violations.",
+     "evidence_ids": [
+      "logagg:fivo-api:0012"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H4",
+   "rank": 4,
+   "statement": "A client-side change (new app release, bad or missing client_seq) hits a latent write-path bug, independent of the deploy.",
+   "service": "fivo-api",
+   "category": "traffic_change",
+   "confidence": 0.03,
+   "verdict": "ruled_out",
+   "supporting": [
+    {
+     "statement": "After 08:20 a user's saved rows show one device's seq run advancing with the other device's seqs missing. This fits rejected writes, and H1 explains it equally well.",
+     "evidence_ids": [
+      "db:transactions:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "Failures are spread across many iOS and Android devices, and several devices both succeed and fail in the same window.",
+     "evidence_ids": [
+      "logagg:fivo-api:0011"
+     ]
+    },
+    {
+     "statement": "client_seq runs consecutively per device across 08:20, with no resets or duplicates.",
+     "evidence_ids": [
+      "db:transactions:0001"
+     ]
+    },
+    {
+     "statement": "The key format switched exactly at the deploy time.",
+     "evidence_ids": [
+      "db:transactions:0002",
+      "db:transactions:0004"
+     ]
+    },
+    {
+     "statement": "A single server-side constraint conflict dominates the errors.",
+     "evidence_ids": [
+      "logagg:fivo-api:0012"
+     ]
+    }
+   ]
+  }
+ ],
+ "facts": [
+  {
+   "statement": "dep-0414 (ef5484ec, previous 7bc71c84) went live in fivo-api at 2026-11-10T08:20:00Z; it is the only deploy found, and no config changes were recorded 04:00-09:02.",
+   "evidence_ids": [
+    "deploy:fivo-api:0001",
+    "config:config_changes:0001"
+   ]
+  },
+  {
+   "statement": "The deploy changes only app/services/idempotency.py, one line: the key lost device_id.",
+   "evidence_ids": [
+    "changes:fivo-api:0001",
+    "diff:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "Neither POST /transactions nor quick-add catches IntegrityError, and the unique constraint on idempotency_key is global.",
+   "evidence_ids": [
+    "code:fivo-api:0001",
+    "codehit:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "In 08:12-09:02, /transactions returned 79 500s (1 in baseline) and quick-add returned 9 500s with 17 201s (0 500s in baseline).",
+   "evidence_ids": [
+    "logagg:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "Error logs begin in the 08:20 bucket and stay elevated through 09:00.",
+   "evidence_ids": [
+    "logagg:fivo-api:0002"
+   ]
+  },
+  {
+   "statement": "Of 77 error lines in 08:20-09:00, 67 were on /transactions, 9 on quick-add and 1 on /categories; 75 are UniqueViolation on uq_transactions_idempotency_key and 2 are ConnectionResetError.",
+   "evidence_ids": [
+    "logagg:fivo-api:0007",
+    "logagg:fivo-api:0012"
+   ]
+  },
+  {
+   "statement": "The first sampled UniqueViolation is at 08:22:31. The failures are fast and repeat from the same device, which looks like client retries.",
+   "evidence_ids": [
+    "log:fivo-api:0007",
+    "log:fivo-api:0008",
+    "log:fivo-api:0009"
+   ]
+  },
+  {
+   "statement": "All 111 rows saved 08:20:20-09:01:52 (46 users) use the user:seq key; none use the old format.",
+   "evidence_ids": [
+    "db:transactions:0002",
+    "db:transactions:0004"
+   ]
+  },
+  {
+   "statement": "There are 0 matches for QueuePool, OperationalError, timeout, connection refused or redis in fivo-api errors, and fivo-worker logged no errors.",
+   "evidence_ids": [
+    "logagg:fivo-api:0008",
+    "logagg:fivo-api:0009",
+    "logagg:fivo-api:0006",
+    "logagg:fivo-api:0010",
+    "logagg:fivo-api:0004",
+    "logagg:fivo-worker:0001"
+   ]
+  }
+ ],
+ "assumptions": [
+  "The colliding existing rows come from a different device of the same user. This is inferred from the code and data; no failing request's key was paired with an existing row.",
+  "The roughly 12 error lines outside the classified 08:20-09:00 window (between 09:00 and 09:02) are assumed to be the same failure.",
+  "The 2 ConnectionResetError lines and the 1 baseline /transactions 500 are assumed to be unrelated noise.",
+  "Neon, Redis and the external dependencies were not checked directly; they are assumed healthy because no log lines point to them.",
+  "Exact onset is bounded by the 5-minute log buckets."
+ ],
+ "recommended_actions": [
+  {
+   "action": "Roll back fivo-api to 7bc71c84 (revert ef5484e / dep-0414).",
+   "rationale": "Restores the device-scoped key user:device:seq, which stops the new collisions. The 5xx started with the deploy at 08:20 and was still occurring at 09:00.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "deploy:fivo-api:0001",
+    "diff:fivo-api:0001",
+    "logagg:fivo-api:0002"
+   ]
+  },
+  {
+   "action": "Ask support to tell the two affected mobile users to retry once the rollback is live.",
+   "rationale": "Rejected inserts are rolled back, so those entries were not saved.",
+   "priority": "soon",
+   "evidence_ids": [
+    "db:transactions:0002"
+   ]
+  },
+  {
+   "action": "Before re-shipping shorter keys, keep device_id in the key or make the replay check and constraint consistent. Catch IntegrityError on both write routes and return the existing entry or a 409, not a 500.",
+   "rationale": "The replay check is device-scoped while the key is not, and the routes only flush and commit with no duplicate handling.",
+   "priority": "soon",
+   "evidence_ids": [
+    "code:fivo-api:0001",
+    "code:fivo-api:0002",
+    "codehit:fivo-api:0001"
+   ]
+  },
+  {
+   "action": "Add a test with one user on two devices sending the same client_seq, and an alert on UniqueViolation counts on uq_transactions_idempotency_key.",
+   "rationale": "This would have caught the regression before or right after deploy; the first collision logged was 08:22.",
+   "priority": "later",
+   "evidence_ids": [
+    "log:fivo-api:0007",
+    "db:transactions:0003"
+   ]
+  },
+  {
+   "action": "Confirm the cause after rollback by checking that the UniqueViolation count drops to zero.",
+   "rationale": "This closes the one inferred link, since no failing key has been paired with an existing row.",
+   "priority": "soon",
+   "evidence_ids": [
+    "logagg:fivo-api:0012"
+   ]
+  }
+ ],
+ "missing_evidence": [
+  "No failing request's key was paired with an existing row from a different device_id; the last data step (S12) was skipped because the investigation was accepted. Logs carry neither client_seq nor the key, and rejected inserts are not stored.",
+  "The exception type of about 12 error lines outside the classified 08:20-09:00 window was not checked.",
+  "No metrics were queried for neon-postgres, upstash-redis or the external APIs, and no deploys were checked for them.",
+  "App version is not in the logs (user_agent is empty).",
+  "Several samples were partial or capped: device_id counts are lower bounds, transaction rows were capped at 50, and error line samples were limited.",
+  "The 2 ConnectionResetError lines are unexplained."
+ ],
+ "what_changed": {
+  "what_changed": "The idempotency key construction dropped device_id, so keys are now unique per user and seq instead of per user, device and seq.",
+  "changed_at": "2026-11-10T08:20:00Z",
+  "why_not_earlier": "",
+  "before": {
+   "statement": "Rows saved before 08:20 carry three-part keys such as 113:and-4cf0:351 and 132:ios-7ed8:254. The baseline hour had 1 500 on /transactions and none on quick-add.",
+   "evidence_ids": [
+    "db:transactions:0001",
+    "logagg:fivo-api:0001"
+   ]
+  },
+  "after": {
+   "statement": "All 111 rows saved from 08:20:20 to 09:01:52 use the short user:seq key, and none use the old format. The first sampled UniqueViolation is at 08:22:31. There are 79 500s on /transactions and 9 on quick-add, which was 0 in the baseline.",
+   "evidence_ids": [
+    "db:transactions:0002",
+    "db:transactions:0004",
+    "log:fivo-api:0007",
+    "logagg:fivo-api:0001"
+   ]
+  }
+ },
+ "changes_considered": [
+  {
+   "change": "deploy on fivo-api: commit ef5484e \"idempotency: shorter keys, client_seq already identifies the entry\" by github-actions",
+   "when": "2026-11-10T08:20:00Z",
+   "timing": "0 min before onset",
+   "disposition": "cause",
+   "reason": "Deploy dep-0414 (ef5484e) went live at 08:20:00Z, the same time as error onset. Its one-line diff drops device_id from the key. All post-deploy rows use the new key. The UniqueViolations on uq_transactions_idempotency_key began at 08:22 and there were none before. No other deploy or config change is recorded.",
+   "evidence_ids": [
+    "deploy:fivo-api:0001",
+    "diff:fivo-api:0001",
+    "db:transactions:0002",
+    "logagg:fivo-api:0002",
+    "config:config_changes:0001"
+   ]
+  }
+ ],
+ "why_now_evidenced": true,
+ "citations": {
+  "cited": 80,
+  "invalid": 0,
+  "facts_demoted": 0
+ },
+ "meta": {
+  "system": "multi_agent",
+  "termination": "accepted",
+  "rounds": 1,
+  "hypotheses": 4,
+  "steps": 9,
+  "steps_failed": 0,
+  "max_hops": 3,
+  "tool_calls": 36,
+  "tool_failures": 0,
+  "guardrail_rejections": 0,
+  "evidence_records": 51,
+  "dropped_citations": 0,
+  "changes_on_record": 1,
+  "changes_unexamined": 0,
+  "operator_notes": 0,
+  "llm_calls": 32,
+  "input_tokens": 331761,
+  "output_tokens": 31656,
+  "total_tokens": 363417,
+  "cost_usd": 0.7526,
+  "latency_s": 193.4,
+  "by_agent": {
+   "dependency": {
+    "calls": 3,
+    "tokens": 13252,
+    "cost_usd": 0.0265,
+    "model": "claude-sonnet-5-5"
+   },
+   "observability": {
+    "calls": 14,
+    "tokens": 135723,
+    "cost_usd": 0.2215,
+    "model": "claude-sonnet-5-5"
+   },
+   "reasoning": {
+    "calls": 2,
+    "tokens": 33737,
+    "cost_usd": 0.1362,
+    "model": "claude-sonnet-5-5"
+   },
+   "code": {
+    "calls": 4,
+    "tokens": 37260,
+    "cost_usd": 0.052,
+    "model": "claude-sonnet-5-5"
+   },
+   "data": {
+    "calls": 7,
+    "tokens": 84201,
+    "cost_usd": 0.0937,
+    "model": "claude-sonnet-5-5"
+   },
+   "critic": {
+    "calls": 1,
+    "tokens": 31769,
+    "cost_usd": 0.1217,
+    "model": "claude-sonnet-5-5"
+   },
+   "reporting": {
+    "calls": 1,
+    "tokens": 27475,
+    "cost_usd": 0.1013,
+    "model": "claude-sonnet-5-5"
+   }
+  }
+ }
+}

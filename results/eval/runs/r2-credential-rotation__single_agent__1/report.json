@@ -1,0 +1,306 @@
+{
+ "status": "conclusive",
+ "summary": "Receipts stopped reaching 'processed' because fivo-worker is still using the old R2 access key. The key was rotated at 09:23, and fivo-api was updated at 09:25. No config change for fivo-worker is recorded. The old key's 30-minute grace period ended at 09:53. From 09:54:22 every process_receipt task failed with 403 Forbidden on R2 GetObject. Fix: set the new R2_ACCESS_KEY_ID (****7c2e) in fivo-worker's environment and restart it. Then re-queue the receipts that failed. One gap: the worker's environment was not inspected directly, so the stale key is inferred.",
+ "root_cause": {
+  "service": "fivo-worker",
+  "component": "R2_ACCESS_KEY_ID in the fivo-worker environment (not updated after the R2 key rotation cfg-0139)",
+  "category": "config_change",
+  "summary": "The quarterly R2 key rotation at 09:23 changed the key and updated fivo-api's copy at 09:25. The worker's separate copy was not updated, and no worker config change is recorded. When the old key was revoked at 09:53, the worker's GetObject calls began returning 403. process_receipt and embed_pending_receipts then failed, so no receipt reached 'processed' while uploads through the api still succeeded."
+ },
+ "hypotheses": [
+  {
+   "id": "H1",
+   "rank": 1,
+   "statement": "fivo-worker still holds the revoked old R2 key, so its R2 GetObject calls return 403.",
+   "service": "fivo-worker",
+   "category": "config_change",
+   "confidence": 0.92,
+   "verdict": "most_likely",
+   "supporting": [
+    {
+     "statement": "The rotation happened at 09:23 and the old key was revoked at 09:53. fivo-api's env var was updated at 09:25.",
+     "evidence_ids": [
+      "config:r2-storage:0001",
+      "config:fivo-api:0001",
+      "config:r2-storage:0002"
+     ]
+    },
+    {
+     "statement": "The first 403 on process_receipt came at 09:54:22, a minute after revocation. Successes were logged up to 09:51:48.",
+     "evidence_ids": [
+      "log:fivo-worker:0001",
+      "log:fivo-worker:0017"
+     ]
+    },
+    {
+     "statement": "embed_pending_receipts also fails with 403 GetObject, which fits a worker-wide credential problem.",
+     "evidence_ids": [
+      "log:fivo-worker:0006"
+     ]
+    },
+    {
+     "statement": "Errors continue every 5-minute bucket through 10:20 and are 1 to 6 per bucket. Each error bucket also has some info lines, which were not inspected.",
+     "evidence_ids": [
+      "logagg:fivo-worker:0002"
+     ]
+    },
+    {
+     "statement": "No fivo-worker config changes are recorded, which is consistent with the worker's key being left stale.",
+     "evidence_ids": [
+      "config:fivo-worker:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "The worker's actual env value was not observed.",
+     "evidence_ids": [
+      "config:fivo-worker:0001"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H2",
+   "rank": 2,
+   "statement": "Groq 429 rate limiting is blocking processing.",
+   "service": "groq-llm",
+   "category": "dependency_failure",
+   "confidence": 0.04,
+   "verdict": "ruled_out",
+   "supporting": [
+    {
+     "statement": "Groq 429 retries appeared at 09:20-09:27.",
+     "evidence_ids": [
+      "log:fivo-worker:0009",
+      "log:fivo-worker:0011"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "The retries affect categorize_transaction, not process_receipt. They are only 3 warnings, before the failure window, and they back off and retry after 1s.",
+     "evidence_ids": [
+      "log:fivo-worker:0009"
+     ]
+    },
+    {
+     "statement": "Receipts kept succeeding until 09:51:48, after the 429s.",
+     "evidence_ids": [
+      "log:fivo-worker:0017"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H3",
+   "rank": 3,
+   "statement": "A code deploy caused the failure.",
+   "service": "fivo-api",
+   "category": "code_regression",
+   "confidence": 0.02,
+   "verdict": "ruled_out",
+   "supporting": [],
+   "contradicting": [
+    {
+     "statement": "No deploys were found in the 24h before the incident.",
+     "evidence_ids": [
+      "deploy:deploys:0001"
+     ]
+    }
+   ]
+  }
+ ],
+ "facts": [
+  {
+   "statement": "The R2 access key was rotated at 09:23 and the old key stayed valid for 30 minutes.",
+   "evidence_ids": [
+    "config:r2-storage:0001"
+   ]
+  },
+  {
+   "statement": "fivo-api's R2_ACCESS_KEY_ID was updated at 09:25 to ****7c2e.",
+   "evidence_ids": [
+    "config:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "The old key was revoked at 09:53.",
+   "evidence_ids": [
+    "config:r2-storage:0002"
+   ]
+  },
+  {
+   "statement": "The last successful process_receipt was at 09:51:48.",
+   "evidence_ids": [
+    "log:fivo-worker:0017"
+   ]
+  },
+  {
+   "statement": "The first process_receipt 403 came at 09:54:22 (ClientError 403 on GetObject).",
+   "evidence_ids": [
+    "log:fivo-worker:0001"
+   ]
+  },
+  {
+   "statement": "embed_pending_receipts also failed with 403 on GetObject at 09:58:00.",
+   "evidence_ids": [
+    "log:fivo-worker:0006"
+   ]
+  },
+  {
+   "statement": "No fivo-worker config change is recorded from 11-01 to 11-10, and the topology says each service keeps its own copy of the R2 key.",
+   "evidence_ids": [
+    "config:fivo-worker:0001",
+    "topology:r2-storage:0001"
+   ]
+  },
+  {
+   "statement": "Worker errors are continuous from the 09:50 bucket to 10:20. process_receipt error counts per 5-minute bucket are 1, 6, 5, 4, 1, 4 and 3.",
+   "evidence_ids": [
+    "logagg:fivo-worker:0001",
+    "logagg:fivo-worker:0002"
+   ]
+  },
+  {
+   "statement": "POST /receipts returns 202 on the api side, so uploads succeed.",
+   "evidence_ids": [
+    "logagg:fivo-api:0001"
+   ]
+  }
+ ],
+ "assumptions": [
+  "The worker's R2_ACCESS_KEY_ID still holds the old value ****a91f. This is inferred from the missing config change and the timing, not read from the worker's environment.",
+  "The 403s come from the revoked credential rather than a bucket policy change. No other R2 change is recorded.",
+  "Each process_receipt error bucket also has some info lines. The failure is assumed to cover all receipts, but those lines were not inspected."
+ ],
+ "recommended_actions": [
+  {
+   "action": "Set R2_ACCESS_KEY_ID to the new key (****7c2e) in fivo-worker's environment, together with the matching secret if it was also rotated. Restart the worker.",
+   "rationale": "Restores worker access to R2.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "config:r2-storage:0001",
+    "log:fivo-worker:0001"
+   ]
+  },
+  {
+   "action": "Re-queue or re-run process_receipt for receipts uploaded since about 09:53 that are not in 'processed'. Confirm that embed_pending_receipts recovers.",
+   "rationale": "Tasks that failed with 403 were not completed.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "logagg:fivo-worker:0002",
+    "log:fivo-worker:0006"
+   ]
+  },
+  {
+   "action": "Add a credential rotation checklist covering every service that holds the key (api and worker). Alert on 403 from R2 and on process_receipt failure rate.",
+   "rationale": "The api copy was updated and the worker copy was missed. The failure showed up only when the grace period ended.",
+   "priority": "soon",
+   "evidence_ids": [
+    "topology:r2-storage:0001",
+    "config:r2-storage:0002"
+   ]
+  }
+ ],
+ "missing_evidence": [
+  "The worker's actual environment variable value and the time of its last restart. No config record exists for it.",
+  "Database state of receipts (pending vs processed), which was not queried.",
+  "Full list of failed jobs: the raw log fetch was capped and partial.",
+  "The info lines in the error buckets, to confirm that receipts fail consistently after revocation."
+ ],
+ "what_changed": {
+  "what_changed": "The old R2 access key was revoked at the end of the rotation grace period. fivo-api had the new key, and fivo-worker apparently did not.",
+  "changed_at": "2026-11-10T09:53:00Z",
+  "why_not_earlier": "The rotation at 09:23 left the old key valid for a 30-minute grace period, so the stale key in the worker kept working until revocation at 09:53.",
+  "before": {
+   "statement": "The worker authenticated to R2 successfully. process_receipt succeeded, for example in 8.18s at 09:51:48, and the old key was still valid.",
+   "evidence_ids": [
+    "log:fivo-worker:0017",
+    "config:r2-storage:0001"
+   ]
+  },
+  "after": {
+   "statement": "From 09:54:22 process_receipt and embed_pending_receipts fail with 403 Forbidden on GetObject.",
+   "evidence_ids": [
+    "log:fivo-worker:0001",
+    "log:fivo-worker:0006",
+    "logagg:fivo-worker:0002"
+   ]
+  }
+ },
+ "changes_considered": [
+  {
+   "change": "r2-storage R2_ACCESS_KEY_ID rotation (cfg-0139)",
+   "when": "2026-11-10T09:23:00Z",
+   "timing": "",
+   "disposition": "contributing",
+   "reason": "It started the rotation. The new key was not propagated to the worker, so the change set up the failure, but the revocation triggered it.",
+   "evidence_ids": [
+    "config:r2-storage:0001"
+   ]
+  },
+  {
+   "change": "fivo-api env var R2_ACCESS_KEY_ID updated (cfg-0142)",
+   "when": "2026-11-10T09:25:00Z",
+   "timing": "",
+   "disposition": "ruled_out",
+   "reason": "The api got the new key and continues to accept uploads. The api is not the failing component.",
+   "evidence_ids": [
+    "config:fivo-api:0001",
+    "logagg:fivo-api:0001"
+   ]
+  },
+  {
+   "change": "r2-storage old key revoked, grace period ended (cfg-0145)",
+   "when": "2026-11-10T09:53:00Z",
+   "timing": "",
+   "disposition": "cause",
+   "reason": "The first 403 came at 09:54:22, a minute after revocation. Before it, the worker succeeded using the old key.",
+   "evidence_ids": [
+    "config:r2-storage:0002",
+    "log:fivo-worker:0001"
+   ]
+  },
+  {
+   "change": "Code deploys in the prior 24h",
+   "when": "2026-11-09T08:00:00Z",
+   "timing": "",
+   "disposition": "ruled_out",
+   "reason": "No deploys were found.",
+   "evidence_ids": [
+    "deploy:deploys:0001"
+   ]
+  },
+  {
+   "change": "fivo-worker config changes",
+   "when": "2026-11-10T09:23:00Z",
+   "timing": "",
+   "disposition": "contributing",
+   "reason": "None were recorded, so the worker kept the old key. This is the omission that led to the failure.",
+   "evidence_ids": [
+    "config:fivo-worker:0001"
+   ]
+  }
+ ],
+ "why_now_evidenced": true,
+ "citations": {
+  "cited": 43,
+  "invalid": 0,
+  "facts_demoted": 0
+ },
+ "meta": {
+  "system": "single_agent",
+  "termination": "agent finished",
+  "tool_calls": 11,
+  "tool_failures": 0,
+  "guardrail_rejections": 1,
+  "evidence_records": 35,
+  "llm_calls": 6,
+  "input_tokens": 99285,
+  "output_tokens": 5200,
+  "total_tokens": 104485,
+  "cost_usd": 0.098,
+  "latency_s": 44.9
+ }
+}

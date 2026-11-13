@@ -1,0 +1,44 @@
+{
+ "scenario": "poison-receipt-requeue-loop",
+ "system": "multi_agent",
+ "run": 1,
+ "tags": [
+  "misleading",
+  "multi_hop"
+ ],
+ "correct": true,
+ "accepted_as": "primary",
+ "service_match": true,
+ "category_match": true,
+ "conclusive": true,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 82,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 0.667,
+ "key_evidence_collected": 0.667,
+ "reported": {
+  "service": "fivo-worker",
+  "category": "data_issue",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "fivo-worker",
+  "category": "data_issue"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report identifies the same root cause: a 131-byte HEIC receipt 4363 crashes process_receipt natively (exit 139) and is redelivered after every restart, starving the queue, and it correctly notes no deploy preceded onset.",
+ "tool_calls": 51,
+ "tool_failures": 0,
+ "guardrail_rejections": 1,
+ "llm_calls": 39,
+ "input_tokens": 541385,
+ "output_tokens": 35571,
+ "total_tokens": 576956,
+ "cost_usd": 0.8064,
+ "latency_s": 939.8,
+ "rounds": 1,
+ "max_hops": 3,
+ "termination": "accepted"
+}

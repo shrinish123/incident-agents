@@ -1,0 +1,43 @@
+{
+ "scenario": "groq-degradation-retry-storm",
+ "system": "multi_agent",
+ "run": 1,
+ "tags": [
+  "multi_hop"
+ ],
+ "correct": true,
+ "accepted_as": "primary",
+ "service_match": true,
+ "category_match": true,
+ "conclusive": true,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 90,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 1.0,
+ "key_evidence_collected": 1.0,
+ "reported": {
+  "service": "groq-llm",
+  "category": "dependency_failure",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "groq-llm",
+  "category": "dependency_failure"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report identifies groq-llm as the degraded dependency, with 30 s timeouts and 503s from fivo-worker calls, a backed-up queue and quick-add 504s from its 8 s wait, and no deploy or config change, which matches the key's mechanism.",
+ "tool_calls": 58,
+ "tool_failures": 0,
+ "guardrail_rejections": 7,
+ "llm_calls": 42,
+ "input_tokens": 556074,
+ "output_tokens": 39451,
+ "total_tokens": 595525,
+ "cost_usd": 0.9483,
+ "latency_s": 204.8,
+ "rounds": 1,
+ "max_hops": 3,
+ "termination": "accepted"
+}

@@ -1,0 +1,408 @@
+{
+ "status": "conclusive",
+ "summary": "At 13:51:00Z config change cfg-0139 cut fivo-api's DB_POOL_SIZE from 10 to 2 (dashboard, dev). The engine has max_overflow=0 and pool_timeout=5.0 s, so requests that cannot get one of 2 connections wait 5 s and fail with sqlalchemy.exc.TimeoutError. The first such error is at 13:52:03Z, db_connections is a flat 2 from 13:52Z, and p95 is pinned at 5006 ms. The 5xx errors are partial and span many DB routes, while /health stays 200. Restoring DB_POOL_SIZE to 10 is the immediate mitigation. This has not yet been confirmed by reverting.",
+ "root_cause": {
+  "service": "fivo-api",
+  "component": "DB_POOL_SIZE env var (cfg-0139), SQLAlchemy engine in app/db.py",
+  "category": "config_change",
+  "summary": "cfg-0139 reduced DB_POOL_SIZE from 10 to 2 at 13:51:00Z. With max_overflow=0 and a 5 s pool timeout, concurrent requests that each hold a session exhaust the 2-connection pool and fail with QueuePool timeouts. This produces 500s and the 5006 ms latency ceiling on every DB-backed route."
+ },
+ "hypotheses": [
+  {
+   "id": "H1",
+   "rank": 1,
+   "statement": "Config change cfg-0139 (DB_POOL_SIZE 10 -> 2 at 13:51Z) starved fivo-api's connection pool, so DB-backed requests hit the 5 s pool timeout and return 500.",
+   "service": "fivo-api",
+   "category": "config_change",
+   "confidence": 0.9,
+   "verdict": "most_likely",
+   "supporting": [
+    {
+     "statement": "Config change set DB_POOL_SIZE 10 -> 2 at 13:51:00Z.",
+     "evidence_ids": [
+      "config:fivo-api:0001"
+     ]
+    },
+    {
+     "statement": "All 28 error lines in 13:48-14:00Z are 'QueuePool limit of size 2 overflow 0 reached ... timeout 5.00'. The first is at 13:52:03Z, after the change.",
+     "evidence_ids": [
+      "logagg:fivo-api:0003",
+      "log:fivo-api:0001",
+      "log:fivo-api:0028"
+     ]
+    },
+    {
+     "statement": "db_connections is a flat 2.0 from 13:52Z. error_rate was 0.0 through 13:50Z and rose from 13:51Z to 0.6071 by 13:59Z.",
+     "evidence_ids": [
+      "metric:fivo-api:0007",
+      "metric:fivo-api:0008"
+     ]
+    },
+    {
+     "statement": "Code sets pool_size from DB_POOL_SIZE, max_overflow=0 and pool_timeout=5.0. This matches the 5006 ms p95 ceiling.",
+     "evidence_ids": [
+      "code:fivo-api:0001",
+      "codehit:fivo-api:0002",
+      "metric:fivo-api:0001"
+     ]
+    },
+    {
+     "statement": "Errors span many routes while /health stays 200. Successful requests continue, which fits partial pool starvation.",
+     "evidence_ids": [
+      "logagg:fivo-api:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "error_rate 0.0333 at 13:51Z precedes the first error log by about a minute. This is unexplained but small. The 5-minute metrics show onset in the 13:50 bucket, which is bucket granularity.",
+     "evidence_ids": [
+      "metric:fivo-api:0008",
+      "metric:fivo-api:0002"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H2",
+   "rank": 2,
+   "statement": "Deploy dep-0414 (b139bb3, 'access log: record the request id') introduced a regression causing 500s and stalls.",
+   "service": "fivo-api",
+   "category": "code_regression",
+   "confidence": 0.02,
+   "verdict": "ruled_out",
+   "supporting": [
+    {
+     "statement": "It was deployed 9 minutes before the 13:50 onset on code that runs on every request.",
+     "evidence_ids": [
+      "deploy:fivo-api:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "The diff only adds one request_id key to the access log, plus README lines. It has no I/O, DB or session code.",
+     "evidence_ids": [
+      "changes:fivo-api:0001",
+      "diff:fivo-api:0001",
+      "diff:fivo-api:0002"
+     ]
+    },
+    {
+     "statement": "The first error is at 13:52:03Z, and errors are pool timeouts naming size 2.",
+     "evidence_ids": [
+      "log:fivo-api:0001",
+      "logagg:fivo-api:0003"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H3",
+   "rank": 3,
+   "statement": "neon-postgres is slow, suspended or at its connection limit, as in INC-2026-024.",
+   "service": "neon-postgres",
+   "category": "dependency_failure",
+   "confidence": 0.01,
+   "verdict": "ruled_out",
+   "supporting": [
+    {
+     "statement": "A past incident had QueuePool timeouts caused by a Neon cold start. This is a lead only.",
+     "evidence_ids": [
+      "incident:fivo-api:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "No Neon deploys or config changes were found.",
+     "evidence_ids": [
+      "deploy:neon-postgres:0001",
+      "config:neon-postgres:0001"
+     ]
+    },
+    {
+     "statement": "Neon logs show only routine checkpoint lines.",
+     "evidence_ids": [
+      "logagg:neon-postgres:0002"
+     ]
+    },
+    {
+     "statement": "slow_queries was 0 throughout. Active connections fell at 13:50Z instead of saturating.",
+     "evidence_ids": [
+      "metric:neon-postgres:0002",
+      "metric:neon-postgres:0001"
+     ]
+    },
+    {
+     "statement": "The errors are client-side pool timeouts of size 2.",
+     "evidence_ids": [
+      "logagg:fivo-api:0003"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H4",
+   "rank": 4,
+   "statement": "The single 512 MB fivo-api instance is out of memory or CPU, or thrashing.",
+   "service": "fivo-api",
+   "category": "resource_exhaustion",
+   "confidence": 0.01,
+   "verdict": "ruled_out",
+   "supporting": [
+    {
+     "statement": "fivo-api runs on one 512 MB instance shared by all routes.",
+     "evidence_ids": [
+      "topology:fivo-api:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "Memory stayed at 198.7-208.0 MB and CPU at 6.6-22.5% with no shift.",
+     "evidence_ids": [
+      "metric:fivo-api:0003",
+      "metric:fivo-api:0004"
+     ]
+    },
+    {
+     "statement": "Only two restarts occurred, at 13:41Z and 13:51Z, each matching a change. None followed.",
+     "evidence_ids": [
+      "metric:fivo-api:0005"
+     ]
+    }
+   ]
+  }
+ ],
+ "facts": [
+  {
+   "statement": "cfg-0139 at 13:51:00Z changed fivo-api DB_POOL_SIZE from 10 to 2, by dashboard:dev, with the note 'stay under the database plan's connection limit'.",
+   "evidence_ids": [
+    "config:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "Deploy dep-0414 (b139bb3) went live at 13:41:00Z. Its diff only adds a request_id key to the access log, plus README lines.",
+   "evidence_ids": [
+    "deploy:fivo-api:0001",
+    "changes:fivo-api:0001",
+    "diff:fivo-api:0002"
+   ]
+  },
+  {
+   "statement": "All 28 error lines in 13:48-14:00Z are QueuePool size 2 timeout errors. The first is at 13:52:03Z.",
+   "evidence_ids": [
+    "logagg:fivo-api:0003",
+    "log:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "db_connections is a constant 2.0 from 13:52Z to 14:24Z. Before that it ranged 2-8.",
+   "evidence_ids": [
+    "metric:fivo-api:0007"
+   ]
+  },
+  {
+   "statement": "error_rate was 0.0 from 13:45Z to 13:50Z and reached 0.6071 by 13:59Z.",
+   "evidence_ids": [
+    "metric:fivo-api:0008"
+   ]
+  },
+  {
+   "statement": "p95 latency sat at 5006 ms from 13:55Z to 14:20Z. Baseline mean was about 932 ms.",
+   "evidence_ids": [
+    "metric:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "500s span /transactions, /summary, quick-add, /receipts and /categories. The health check returned 200 throughout.",
+   "evidence_ids": [
+    "logagg:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "The engine uses pool_size=settings.db_pool_size, max_overflow=0 and pool_timeout=5.0 s. Sessions are request-scoped.",
+   "evidence_ids": [
+    "code:fivo-api:0001",
+    "codehit:fivo-api:0002",
+    "codehit:fivo-api:0003"
+   ]
+  },
+  {
+   "statement": "Neon had no deploys or config changes and slow_queries was 0. fivo-api memory and CPU were flat.",
+   "evidence_ids": [
+    "deploy:neon-postgres:0001",
+    "config:neon-postgres:0001",
+    "metric:neon-postgres:0002",
+    "metric:fivo-api:0003",
+    "metric:fivo-api:0004"
+   ]
+  }
+ ],
+ "assumptions": [
+  "The 13:51Z restart is probably the instance restarting to apply the env var. This is inferred from timing.",
+  "Sessions may stay open during the quick-add worker wait and the insights LLM call. This is inferred, not proven, and does not change the conclusion.",
+  "No evidence quantifies concurrent connection hold times. Saturation of a pool of 2 at the observed request rate is inferred.",
+  "The 13:50 onset in the 5-minute metrics is assumed to be bucket granularity, because 1-minute data shows errors starting after 13:51Z."
+ ],
+ "recommended_actions": [
+  {
+   "action": "Restore fivo-api DB_POOL_SIZE to 10 (revert cfg-0139) and watch error_rate, p95 and db_connections.",
+   "rationale": "This restores the pre-change pool cap, under which there were no errors. It also confirms the cause.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "config:fivo-api:0001",
+    "log:fivo-api:0001",
+    "metric:fivo-api:0007"
+   ]
+  },
+  {
+   "action": "If the database plan's connection limit is a real concern, pick a pool size from measured concurrent use (db_connections reached 8 before the change). Shorten session lifetime in quick-add and insights so they do not hold a session across the worker wait or the LLM call.",
+   "rationale": "The change was meant to stay under a plan limit, but 2 is too small for the demand. Long-held sessions make a small pool saturate.",
+   "priority": "soon",
+   "evidence_ids": [
+    "codehit:fivo-api:0003",
+    "code:fivo-api:0002",
+    "metric:fivo-api:0007"
+   ]
+  },
+  {
+   "action": "Alert on QueuePool TimeoutError counts and on db_connections pinned at the pool cap. Add review or a staged rollout for pool-size env var changes. Add a health check that touches the DB.",
+   "rationale": "/health stayed 200 while many routes failed for over 30 minutes, and detection came about 15 minutes after onset.",
+   "priority": "later",
+   "evidence_ids": [
+    "logagg:fivo-api:0001",
+    "logagg:fivo-api:0002"
+   ]
+  }
+ ],
+ "missing_evidence": [
+  "No revert of DB_POOL_SIZE has been tried yet, so recovery is unconfirmed.",
+  "There is no separate pool checked-out metric, so in-use connections cannot be told apart from the cap.",
+  "Error lines 0017-0028 were seen only as summaries. Their route and duration fields were not read.",
+  "The single fivo-worker warning line (logagg:fivo-worker:0001) was never read.",
+  "Neon's external status page could not be checked."
+ ],
+ "what_changed": {
+  "what_changed": "DB_POOL_SIZE was reduced from 10 to 2 on fivo-api via the dashboard (cfg-0139). Pre-change demand reached 8 connections, so a cap of 2 is too small.",
+  "changed_at": "2026-11-10T13:51:00Z",
+  "why_not_earlier": "",
+  "before": {
+   "statement": "Pool cap was 10. db_connections ranged 2-8 (mean about 5.1) and error_rate was 0.0 every minute from 13:45Z to 13:50Z. There were no QueuePool errors before 13:52:03Z.",
+   "evidence_ids": [
+    "config:fivo-api:0001",
+    "metric:fivo-api:0007",
+    "metric:fivo-api:0008",
+    "log:fivo-api:0001"
+   ]
+  },
+  "after": {
+   "statement": "Pool cap is 2. db_connections is a constant 2.0 from 13:52Z to 14:24Z. QueuePool 'size 2 overflow 0 ... timeout 5.00' errors start at 13:52:03Z, and error_rate reaches 0.2143 at 13:52Z and 0.6071 by 13:59Z.",
+   "evidence_ids": [
+    "metric:fivo-api:0007",
+    "metric:fivo-api:0008",
+    "log:fivo-api:0001",
+    "logagg:fivo-api:0003"
+   ]
+  }
+ },
+ "changes_considered": [
+  {
+   "change": "deploy on fivo-api: commit b139bb3 \"access log: record the request id\" by github-actions",
+   "when": "2026-11-10T13:41:00Z",
+   "timing": "9 min before onset",
+   "disposition": "ruled_out",
+   "reason": "The diff only adds a request_id key to the access log and 2 README lines, with no I/O, DB or session code. No errors appeared between the 13:41Z deploy and 13:52:03Z. All errors are pool timeouts that name the new pool size of 2.",
+   "evidence_ids": [
+    "deploy:fivo-api:0001",
+    "diff:fivo-api:0001",
+    "diff:fivo-api:0002",
+    "changes:fivo-api:0001",
+    "log:fivo-api:0001",
+    "metric:fivo-api:0008"
+   ]
+  },
+  {
+   "change": "config on fivo-api: DB_POOL_SIZE: 10 -> 2 by dashboard:dev (\"stay under the database plan's connection limit\")",
+   "when": "2026-11-10T13:51:00Z",
+   "timing": "1 min after onset",
+   "disposition": "cause",
+   "reason": "DB_POOL_SIZE was cut from 10 to 2 at 13:51:00Z. The first QueuePool 'size 2' error is at 13:52:03Z, db_connections is a flat 2 from 13:52Z, and errors are 5006 ms pool timeouts on every DB route. Before the change there were no errors, with demand up to 8 connections.",
+   "evidence_ids": [
+    "config:fivo-api:0001",
+    "log:fivo-api:0001",
+    "metric:fivo-api:0007",
+    "metric:fivo-api:0008",
+    "code:fivo-api:0001"
+   ]
+  }
+ ],
+ "why_now_evidenced": true,
+ "citations": {
+  "cited": 74,
+  "invalid": 0,
+  "facts_demoted": 0
+ },
+ "meta": {
+  "system": "multi_agent",
+  "termination": "accepted",
+  "rounds": 1,
+  "hypotheses": 4,
+  "steps": 8,
+  "steps_failed": 0,
+  "max_hops": 3,
+  "tool_calls": 40,
+  "tool_failures": 0,
+  "guardrail_rejections": 1,
+  "evidence_records": 71,
+  "dropped_citations": 0,
+  "changes_on_record": 2,
+  "changes_unexamined": 0,
+  "operator_notes": 0,
+  "llm_calls": 34,
+  "input_tokens": 391312,
+  "output_tokens": 31023,
+  "total_tokens": 422335,
+  "cost_usd": 0.7249,
+  "latency_s": 196.8,
+  "by_agent": {
+   "observability": {
+    "calls": 15,
+    "tokens": 159577,
+    "cost_usd": 0.2033,
+    "model": "claude-sonnet-5-5"
+   },
+   "dependency": {
+    "calls": 6,
+    "tokens": 47734,
+    "cost_usd": 0.0848,
+    "model": "claude-sonnet-5-5"
+   },
+   "reasoning": {
+    "calls": 2,
+    "tokens": 36761,
+    "cost_usd": 0.1398,
+    "model": "claude-sonnet-5-5"
+   },
+   "code": {
+    "calls": 9,
+    "tokens": 114927,
+    "cost_usd": 0.0851,
+    "model": "claude-sonnet-5-5"
+   },
+   "critic": {
+    "calls": 1,
+    "tokens": 36008,
+    "cost_usd": 0.1209,
+    "model": "claude-sonnet-5-5"
+   },
+   "reporting": {
+    "calls": 1,
+    "tokens": 27328,
+    "cost_usd": 0.0909,
+    "model": "claude-sonnet-5-5"
+   }
+  }
+ }
+}

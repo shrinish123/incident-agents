@@ -1,0 +1,44 @@
+{
+ "scenario": "conflicting-deploy-and-config",
+ "system": "single_agent",
+ "run": 1,
+ "tags": [
+  "conflicting",
+  "misleading"
+ ],
+ "correct": true,
+ "accepted_as": "primary",
+ "service_match": true,
+ "category_match": true,
+ "conclusive": true,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 55,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 0.833,
+ "key_evidence_collected": 0.833,
+ "reported": {
+  "service": "fivo-api",
+  "category": "config_change",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "fivo-api",
+  "category": "config_change"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report identifies cfg-0139 lowering ANTHROPIC_TIMEOUT_S from 20 to 2 on fivo-api as the cause, explains that about half of calls exceed the timeout and return 504, and rules out the deploy as a refactor, which matches the key.",
+ "tool_calls": 12,
+ "tool_failures": 0,
+ "guardrail_rejections": 0,
+ "llm_calls": 5,
+ "input_tokens": 87047,
+ "output_tokens": 5948,
+ "total_tokens": 92995,
+ "cost_usd": 0.1349,
+ "latency_s": 43.7,
+ "rounds": null,
+ "max_hops": null,
+ "termination": "agent finished"
+}

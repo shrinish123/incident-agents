@@ -1,0 +1,431 @@
+{
+ "status": "conclusive",
+ "summary": "From about 11:00-11:05Z on 2026-11-11 fivo-worker's calls to groq-llm began timing out (30 s) or returning 503, with no deploy or config change on our side. categorize_transaction now takes 12-30 s per attempt, while POST /transactions/quick-add waits a fixed 8,000 ms for the worker result, so nearly every quick-add returns 504 from the 11:05 bucket. Other routes do not wait on the worker and stay healthy. Whether Groq itself or the worker's network path is at fault is not established.",
+ "root_cause": {
+  "service": "groq-llm",
+  "component": "fivo-worker categorize_transaction -> Groq chat completions call (30 s timeouts and 503s) against quick-add's fixed 8 s result wait",
+  "category": "dependency_failure",
+  "summary": "Groq calls from fivo-worker degraded at about 11:00-11:05Z (client p95 ~480 ms to ~29 s, error rate 0 to ~0.62). categorize_transaction blocks on these calls, so the worker result arrives long after quick-add's 8 s wait ends, producing 504s. The queue also backs up (depth 0 to 30). The cause of the Groq degradation is not established."
+ },
+ "hypotheses": [
+  {
+   "id": "H1",
+   "rank": 1,
+   "statement": "fivo-worker's categorize_transaction fails or retries against groq-llm (timeouts, 503s), stalling the worker so quick-add's 8 s wait for the result expires and returns 504.",
+   "service": "groq-llm",
+   "category": "dependency_failure",
+   "confidence": 0.82,
+   "verdict": "most_likely",
+   "supporting": [
+    {
+     "statement": "Groq client p95 went from ~480 ms to ~29 s and error rate from 0 to ~0.62, with a level shift at 11:00Z.",
+     "evidence_ids": [
+      "metric:groq-llm:0001",
+      "metric:groq-llm:0002"
+     ]
+    },
+    {
+     "statement": "Worker-to-Groq spans took 175-589 ms until 11:02 and 11.6-19.9 s from 11:05:10.",
+     "evidence_ids": [
+      "trace:fivo-worker:0004",
+      "trace:fivo-worker:0020",
+      "trace:fivo-worker:0024",
+      "trace:fivo-worker:0025",
+      "trace:fivo-worker:0026",
+      "trace:fivo-worker:0027",
+      "trace:fivo-worker:0042"
+     ]
+    },
+    {
+     "statement": "All 103 worker warnings in 11:00-11:40Z are categorize_transaction retries mentioning groq: 72 timeouts and 31 503s. The only errors are Groq timeouts.",
+     "evidence_ids": [
+      "logagg:fivo-worker:0005",
+      "logagg:fivo-worker:0006",
+      "logagg:fivo-worker:0008",
+      "logagg:fivo-worker:0009",
+      "log:fivo-worker:0001"
+     ]
+    },
+    {
+     "statement": "In the traced failing quick-add the API waited 8,000 ms and gave up; the worker task took 13,033 ms, of which 13,019 ms was the Groq POST.",
+     "evidence_ids": [
+      "trace:fivo-api:0033",
+      "trace:fivo-worker:0002",
+      "trace:fivo-worker:0003"
+     ]
+    },
+    {
+     "statement": "Worker task p95 pinned at 30,000 ms from 11:05 and queue depth rose from 0 to 30.",
+     "evidence_ids": [
+      "metric:fivo-worker:0005",
+      "metric:fivo-worker:0004"
+     ]
+    },
+    {
+     "statement": "No deploys or config changes in the window, consistent with an external trigger.",
+     "evidence_ids": [
+      "deploy:deploys:0001",
+      "config:config_changes:0001",
+      "deploy:fivo-worker:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "Trace status shows ok for slow Groq calls, so traces are not a usable error signal.",
+     "evidence_ids": [
+      "trace:fivo-worker:0025"
+     ]
+    },
+    {
+     "statement": "Only 2 warnings mention 429; they were not read, so rate limiting is not excluded as a sub-cause.",
+     "evidence_ids": [
+      "logagg:fivo-worker:0007"
+     ]
+    },
+    {
+     "statement": "Baseline task p95 was ~6 s while Groq p95 was ~480 ms, which is unexplained; the 8 s budget was already tight.",
+     "evidence_ids": [
+      "metric:fivo-worker:0005"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H2",
+   "rank": 2,
+   "statement": "The Celery queue on upstash-redis is stalled (quota, connection limit, broker problem).",
+   "service": "upstash-redis",
+   "category": "resource_exhaustion",
+   "confidence": 0.03,
+   "verdict": "ruled_out",
+   "supporting": [
+    {
+     "statement": "quick-add depends on the Redis queue round trip and no local changes were recorded.",
+     "evidence_ids": [
+      "topology:fivo-api:0001",
+      "deploy:deploys:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "0 worker log lines mention redis; tasks are being received from the queue.",
+     "evidence_ids": [
+      "logagg:fivo-worker:0010",
+      "logagg:fivo-worker:0004"
+     ]
+    },
+    {
+     "statement": "Enqueue took 1.8 ms in the traced request.",
+     "evidence_ids": [
+      "trace:fivo-api:0032"
+     ]
+    },
+    {
+     "statement": "quick-add 504 lines show only the 8000 ms result-not-ready error, with no Redis errors.",
+     "evidence_ids": [
+      "log:fivo-api:0001",
+      "log:fivo-api:0002",
+      "log:fivo-api:0010"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H3",
+   "rank": 3,
+   "statement": "fivo-worker is saturated by a local long-running job or memory pressure on its 512 MB, two-thread instance.",
+   "service": "fivo-worker",
+   "category": "resource_exhaustion",
+   "confidence": 0.02,
+   "verdict": "ruled_out",
+   "supporting": [
+    {
+     "statement": "The worker has only two threads and beat runs in the same process.",
+     "evidence_ids": [
+      "topology:fivo-worker:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "Memory flat at 248-256 MB, CPU fell after 11:00, 0 restarts.",
+     "evidence_ids": [
+      "metric:fivo-worker:0001",
+      "metric:fivo-worker:0002",
+      "metric:fivo-worker:0003"
+     ]
+    },
+    {
+     "statement": "embed_pending_receipts finished in 2.62 s and only categorize_transaction produced warnings or errors.",
+     "evidence_ids": [
+      "log:fivo-worker:0012",
+      "logagg:fivo-worker:0003"
+     ]
+    },
+    {
+     "statement": "No receipt backlog: only 2 pending receipts.",
+     "evidence_ids": [
+      "db:receipts:0001"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H4",
+   "rank": 4,
+   "statement": "neon-postgres lock, slow query or data condition on the quick-add write path.",
+   "service": "neon-postgres",
+   "category": "data_issue",
+   "confidence": 0.02,
+   "verdict": "ruled_out",
+   "supporting": [
+    {
+     "statement": "Nothing of ours changed and only one route is affected, which would also fit a path-specific DB issue.",
+     "evidence_ids": [
+      "deploy:deploys:0001",
+      "logagg:fivo-api:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "DB spans in the failing trace took 5.8 ms (insert) and 6.0 ms (select).",
+     "evidence_ids": [
+      "trace:fivo-api:0031",
+      "trace:fivo-worker:0001"
+     ]
+    },
+    {
+     "statement": "Writes to transactions continued at normal rates and job failures are Groq timeouts, not DB errors.",
+     "evidence_ids": [
+      "db:transactions:0001",
+      "db:jobs:0001"
+     ]
+    }
+   ]
+  }
+ ],
+ "facts": [
+  {
+   "statement": "quick-add returned 201 through the 11:00 bucket and 504 on every call from the 11:05 bucket; other routes showed no 5xx (counts partial).",
+   "evidence_ids": [
+    "logagg:fivo-api:0002",
+    "logagg:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "Groq client p95 was ~480 ms and error rate 0 at 10:50-10:55; from 11:00 p95 was ~29 s and error rate ~0.62 through 11:35.",
+   "evidence_ids": [
+    "metric:groq-llm:0001",
+    "metric:groq-llm:0002"
+   ]
+  },
+  {
+   "statement": "All 103 worker warnings in 11:00-11:40Z were categorize_transaction retries on Groq (72 timed out, 31 503); the first sampled warning is at 11:05:09Z.",
+   "evidence_ids": [
+    "logagg:fivo-worker:0005",
+    "logagg:fivo-worker:0008",
+    "logagg:fivo-worker:0009",
+    "log:fivo-worker:0003"
+   ]
+  },
+  {
+   "statement": "Trace 654ee93acd37dccd (11:05:51Z): enqueue 1.8 ms, DB insert 5.8 ms, API waited 8,000 ms and errored, worker task took 13,033 ms with the Groq POST 13,019 ms.",
+   "evidence_ids": [
+    "trace:fivo-api:0031",
+    "trace:fivo-api:0032",
+    "trace:fivo-api:0033",
+    "trace:fivo-worker:0002",
+    "trace:fivo-worker:0003"
+   ]
+  },
+  {
+   "statement": "Worker queue depth went from 0 to 5 at 11:05 and to 30 at 11:35; task p95 was 30,000 ms from 11:05.",
+   "evidence_ids": [
+    "metric:fivo-worker:0004",
+    "metric:fivo-worker:0005"
+   ]
+  },
+  {
+   "statement": "No deploys or config changes for any service 06:00-11:40Z, and none for fivo-worker since 11-09.",
+   "evidence_ids": [
+    "deploy:deploys:0001",
+    "config:config_changes:0001",
+    "deploy:fivo-worker:0001"
+   ]
+  },
+  {
+   "statement": "quick-add waits on the worker's result via the Redis queue; the worker runs Celery with two threads.",
+   "evidence_ids": [
+    "topology:fivo-api:0001",
+    "topology:fivo-worker:0001"
+   ]
+  },
+  {
+   "statement": "Worker memory, CPU and restarts show no resource exhaustion.",
+   "evidence_ids": [
+    "metric:fivo-worker:0001",
+    "metric:fivo-worker:0002",
+    "metric:fivo-worker:0003"
+   ]
+  }
+ ],
+ "assumptions": [
+  "Worker thread starvation is inferred from queue depth and task duration, not measured directly; a single slow Groq call already exceeds the 8 s wait.",
+  "Queue wait of about 5 s is approximated from span timestamps.",
+  "Onset is stated as ~11:00-11:05Z; fast spans at 11:02:50 suggest the true start is closer to 11:03-11:05.",
+  "Whether the Groq degradation is provider-side or on the worker's network path is not established; the Groq metrics are our own client-side view.",
+  "Only one full trace was examined."
+ ],
+ "recommended_actions": [
+  {
+   "action": "Check Groq's status page and the worker host's network path to api.groq.com now, and confirm the key and account are not rate-limited or over quota.",
+   "rationale": "Groq calls from the worker are the failing step; the provider-side versus path question is open.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "metric:groq-llm:0001",
+    "metric:groq-llm:0002"
+   ]
+  },
+  {
+   "action": "Mitigate quick-add: return 201 with categorisation deferred (async), or fail over to another categoriser, while Groq is degraded.",
+   "rationale": "quick-add's fixed 8 s wait is exceeded by every Groq call at 12-30 s, so every call returns 504.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "trace:fivo-api:0033",
+    "trace:fivo-worker:0002"
+   ]
+  },
+  {
+   "action": "Lower the Groq client timeout from 30 s and cap retries so a slow upstream cannot hold both worker threads; consider a separate queue or more concurrency for categorize_transaction (watch the broker connection limit from INC-2026-021).",
+   "rationale": "30 s timeouts pin task p95 at 30 s and the queue depth grew to 30.",
+   "priority": "soon",
+   "evidence_ids": [
+    "metric:fivo-worker:0005",
+    "metric:fivo-worker:0004",
+    "incident:fivo-worker:0001"
+   ]
+  },
+  {
+   "action": "Read the 2 '429' warnings and check the other worker external dependencies (anthropic, voyage, r2) for the same 11:00 shift.",
+   "rationale": "Distinguishes a Groq rate limit or a worker network problem from a provider outage.",
+   "priority": "soon",
+   "evidence_ids": [
+    "logagg:fivo-worker:0007"
+   ]
+  },
+  {
+   "action": "Add alerts on groq-llm client p95 and error rate, on worker queue_depth, and on the quick-add 504 rate. Investigate why baseline task p95 was ~6 s against an 8 s wait.",
+   "rationale": "The step change at 11:00 was only caught at 11:20 via fivo-api p95, and the 8 s budget was already tight.",
+   "priority": "later",
+   "evidence_ids": [
+    "metric:fivo-worker:0005",
+    "metric:groq-llm:0001"
+   ]
+  }
+ ],
+ "missing_evidence": [
+  "Groq provider status or incident signal and the worker's other external dependencies (S13 was skipped).",
+  "Direct measurement of worker thread occupancy.",
+  "The content of the 2 '429' warnings.",
+  "Upstash metrics were never queried (S7 skipped); pg_stat_activity and lock views were unavailable.",
+  "Several log, trace and count results were partial or capped, so counts are lower bounds; only one full trace was examined.",
+  "Changes to third-party dependencies and changes before 06:00Z on 11-11 were not checked."
+ ],
+ "what_changed": {
+  "what_changed": "Groq responses to fivo-worker's categorize_transaction calls began timing out or returning 503 at about 11:00Z. This is upstream behaviour, since nothing of ours was deployed or reconfigured.",
+  "changed_at": "2026-11-11T11:00:00Z",
+  "why_not_earlier": "",
+  "before": {
+   "statement": "Groq client p95 was ~480 ms with 0 error rate at 10:50-10:55. Worker-to-Groq spans took 175-589 ms through 11:02. quick-add returned 201, including a 1.15 s success at 11:02:49.",
+   "evidence_ids": [
+    "metric:groq-llm:0001",
+    "metric:groq-llm:0002",
+    "trace:fivo-worker:0004",
+    "trace:fivo-worker:0024",
+    "trace:fivo-api:0001"
+   ]
+  },
+  "after": {
+   "statement": "From 11:00, Groq client p95 was ~29 s and the error rate ~0.62. Spans from 11:05:10 took 11.6-19.9 s. Worker task p95 sat at 30 s from 11:05. quick-add returned 504 from the 11:05 bucket.",
+   "evidence_ids": [
+    "metric:groq-llm:0001",
+    "metric:groq-llm:0002",
+    "trace:fivo-worker:0025",
+    "trace:fivo-worker:0042",
+    "metric:fivo-worker:0005",
+    "logagg:fivo-api:0002"
+   ]
+  }
+ },
+ "changes_considered": [],
+ "why_now_evidenced": true,
+ "citations": {
+  "cited": 90,
+  "invalid": 0,
+  "facts_demoted": 0
+ },
+ "meta": {
+  "system": "multi_agent",
+  "termination": "accepted",
+  "rounds": 1,
+  "hypotheses": 4,
+  "steps": 11,
+  "steps_failed": 0,
+  "max_hops": 3,
+  "tool_calls": 58,
+  "tool_failures": 0,
+  "guardrail_rejections": 7,
+  "evidence_records": 143,
+  "dropped_citations": 0,
+  "changes_on_record": 0,
+  "changes_unexamined": 0,
+  "operator_notes": 0,
+  "llm_calls": 42,
+  "input_tokens": 556074,
+  "output_tokens": 39451,
+  "total_tokens": 595525,
+  "cost_usd": 0.9483,
+  "latency_s": 204.8,
+  "by_agent": {
+   "observability": {
+    "calls": 20,
+    "tokens": 257750,
+    "cost_usd": 0.2869,
+    "model": "claude-sonnet-5-5"
+   },
+   "dependency": {
+    "calls": 12,
+    "tokens": 169681,
+    "cost_usd": 0.203,
+    "model": "claude-sonnet-5-5"
+   },
+   "reasoning": {
+    "calls": 2,
+    "tokens": 43874,
+    "cost_usd": 0.1569,
+    "model": "claude-sonnet-5-5"
+   },
+   "data": {
+    "calls": 6,
+    "tokens": 52619,
+    "cost_usd": 0.0666,
+    "model": "claude-sonnet-5-5"
+   },
+   "critic": {
+    "calls": 1,
+    "tokens": 36272,
+    "cost_usd": 0.1194,
+    "model": "claude-sonnet-5-5"
+   },
+   "reporting": {
+    "calls": 1,
+    "tokens": 35329,
+    "cost_usd": 0.1152,
+    "model": "claude-sonnet-5-5"
+   }
+  }
+ }
+}

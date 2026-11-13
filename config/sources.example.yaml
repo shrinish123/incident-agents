@@ -1,0 +1,88 @@
+# Sources the agents can query. Agents see only `name`, `kind` and `description`.
+# Credentials are references resolved by the credential broker at call time.
+sources:
+  appdb:
+    type: postgres
+    kind: sql
+    description: Application database (read replica). Rows, job state, slow queries.
+    auth:
+      username: secret://database/creds/investigator-ro#username   # short-lived, minted by Vault
+      password: secret://database/creds/investigator-ro#password
+    options: {host: localhost, port: 5432, database: app}
+    policy:
+      timeout_s: 3
+      max_rows: 50
+      cost_unit: planner_cost
+      max_cost_per_query: 20000
+      require_estimate: true
+      redact_fields: [email, phone]
+      sql:
+        tables:
+          transactions: {indexed: [id, user_id, created_at, idempotency_key]}
+          users: {indexed: [id], deny_columns: [password_hash]}
+          categories: {small: true}
+
+  logs:
+    type: sumo
+    kind: log_search
+    description: Application and gateway logs.
+    auth:
+      access_id: secret://sumo/prod#access_id
+      access_key: secret://sumo/prod#access_key
+    options: {endpoint: https://api.sumologic.com/api}
+    policy:
+      timeout_s: 60
+      max_rows: 100
+      max_concurrency: 1
+      rate_per_min: 6
+      cost_unit: gb_scanned
+      max_cost_per_query: 5
+      approval_above: 3
+      investigation_budget: 15
+      log_search:
+        required_scope: [index, source_category]
+        max_window_s: 3600
+        raw_max_window_s: 900
+        default_gb_per_hour: 2
+        gb_per_hour: {}   # measured volume per source category
+
+  apm:
+    type: newrelic
+    kind: nrql
+    description: APM traces, transaction timings and container metrics.
+    auth:
+      api_key: secret://newrelic/prod#user_key
+    options: {account_id_env: NEW_RELIC_ACCOUNT_ID}
+    policy:
+      timeout_s: 30
+      max_rows: 100
+      rate_per_min: 20
+      nrql: {max_window_s: 21600}
+
+  code:
+    type: git
+    description: Source code of the services, read at the deployed commit.
+    auth:
+      token: secret://github/readonly#token
+    options:
+      repos:
+        api: {url: https://github.com/your-org/api.git, branch: main, services: [api]}
+        worker: {url: https://github.com/your-org/worker.git, branch: main, services: [worker]}
+
+# Which source answers each kind of question. Agents call vendor-neutral tools
+# (logs_count, metrics_query, db_query, code_diff...); this block decides what
+# runs behind them. Leave a capability out and its tools are not offered.
+capabilities:
+  logs:
+    source: logs
+    dialect: sumo                      # or "simple" for the simulated log source
+    scope: {index: your_index, source_category: "prod/{service}"}
+    services: {}                       # per-service scope overrides
+  metrics:
+    source: apm
+    dialect: nrql
+    templates:
+      error_rate: "SELECT percentage(count(*), WHERE error IS true) FROM Transaction WHERE appName = '{service}' TIMESERIES {step_s} seconds SINCE '{start}' UNTIL '{end}'"
+      p95_latency_ms: "SELECT percentile(duration, 95) * 1000 FROM Transaction WHERE appName = '{service}' TIMESERIES {step_s} seconds SINCE '{start}' UNTIL '{end}'"
+  db: {source: appdb}
+  code: {source: code}

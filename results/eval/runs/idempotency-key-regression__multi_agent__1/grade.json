@@ -1,0 +1,43 @@
+{
+ "scenario": "idempotency-key-regression",
+ "system": "multi_agent",
+ "run": 1,
+ "tags": [
+  "multi_hop"
+ ],
+ "correct": true,
+ "accepted_as": "primary",
+ "service_match": true,
+ "category_match": true,
+ "conclusive": true,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 80,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 1.0,
+ "key_evidence_collected": 1.0,
+ "reported": {
+  "service": "fivo-api",
+  "category": "code_regression",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "fivo-api",
+  "category": "code_regression"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report identifies the same cause as the key: dep-0414 (ef5484e) removed device_id from the idempotency key, so per-device client_seq collisions across a user's devices violate uq_transactions_idempotency_key and return 500s.",
+ "tool_calls": 36,
+ "tool_failures": 0,
+ "guardrail_rejections": 0,
+ "llm_calls": 32,
+ "input_tokens": 331761,
+ "output_tokens": 31656,
+ "total_tokens": 363417,
+ "cost_usd": 0.7526,
+ "latency_s": 193.4,
+ "rounds": 1,
+ "max_hops": 3,
+ "termination": "accepted"
+}

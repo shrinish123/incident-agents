@@ -1,0 +1,274 @@
+{
+ "status": "conclusive",
+ "summary": "Deploy dep-0414 of fivo-worker (sha fdbd6e96, 15:44Z) rewrote `embed_pending_receipts` to load every pending receipt in one pass. About 2,600 legacy receipts are waiting for embeddings, so the task reads all their text into memory before embedding anything. The 512 MB instance hits its limit and is OOM-killed (exit 137) about every 35 seconds. Because the task is redelivered after each kill, the worker never gets to run `process_receipt`. Receipts therefore stay in 'uploaded' while the queue grows. Roll back to 994ebf05, or restore the batched loop, and then drain the backlog in bounded batches.",
+ "root_cause": {
+  "service": "fivo-worker",
+  "component": "worker/tasks/embeddings.py embed_pending_receipts + worker/repo.py list_pending_receipts (commit fdbd6e96, dep-0414)",
+  "category": "code_regression",
+  "summary": "dep-0414 replaced the batched `iter_pending_receipt_ids(limit=64)` loop with `list_pending_receipts()`. It now reads the text of every pending receipt into memory and holds all the vectors before saving. With about 2,600 receipts pending, the first beat run at 15:53 pushed the 512 MB worker past its limit. The worker is OOM-killed and restarts roughly every 35 seconds, and the redelivered embed task re-triggers the kill, so `process_receipt` tasks starve and receipts stay 'uploaded'."
+ },
+ "hypotheses": [
+  {
+   "id": "H1",
+   "rank": 1,
+   "statement": "The embeddings rewrite in dep-0414 loads the whole backlog into memory. This causes an OOM crash loop on the worker that starves process_receipt.",
+   "service": "fivo-worker",
+   "category": "code_regression",
+   "confidence": 0.93,
+   "verdict": "most_likely",
+   "supporting": [
+    {
+     "statement": "The diff removes the batched fetch and save loop, and adds an unbounded `list_pending_receipts()` that reads all texts and accumulates all vectors before a single save.",
+     "evidence_ids": [
+      "diff:fivo-worker:0001",
+      "diff:fivo-worker:0002"
+     ]
+    },
+    {
+     "statement": "Memory jumped from about 243 MB to about 487 MB at 15:52 and stayed pinned near the 512 MB limit. Restarts rose from 0 to 2, and the queue grew from 0 to 170.",
+     "evidence_ids": [
+      "metric:fivo-worker:0001",
+      "metric:fivo-worker:0002",
+      "metric:fivo-worker:0004"
+     ]
+    },
+    {
+     "statement": "The same embed task job_id (864952ab) was received repeatedly, 35 seconds apart, starting at 15:53:00. Platform OOM kills (exit 137) were logged at 15:53:05, 15:53:40 and so on, and were still occurring at 16:30\u201316:35.",
+     "evidence_ids": [
+      "log:fivo-worker:0051",
+      "log:fivo-worker:0052",
+      "log:fivo-worker:0057",
+      "log:fivo-worker:0058",
+      "log:fivo-worker:0041",
+      "log:fivo-worker:0050"
+     ]
+    },
+    {
+     "statement": "About 2,600 processed receipts still have no embedding (the backlog), and 37 receipts are stuck in 'uploaded'.",
+     "evidence_ids": [
+      "db:receipts:0002",
+      "db:receipts:0001"
+     ]
+    },
+    {
+     "statement": "tasks_completed fell from about 4.6 to about 0.9 per minute after the deploy. It reached 0 from 16:10.",
+     "evidence_ids": [
+      "metric:fivo-worker:0003"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "I did not see the heap profile or the Python code for storage.read_text. The per-receipt memory size is inferred from the memory plateau.",
+     "evidence_ids": [
+      "metric:fivo-worker:0001"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H2",
+   "rank": 2,
+   "statement": "An external dependency failure (Anthropic, R2 or Redis quota) is stalling process_receipt.",
+   "service": "anthropic-llm",
+   "category": "dependency_failure",
+   "confidence": 0.04,
+   "verdict": "ruled_out",
+   "supporting": [],
+   "contradicting": [
+    {
+     "statement": "The only errors in the window are platform OOM kills (exit 137, fingerprint fp_974247fe0f). Before the deploy, process_receipt succeeded in about 9s.",
+     "evidence_ids": [
+      "log:fivo-worker:0041",
+      "log:fivo-worker:0007"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H3",
+   "rank": 3,
+   "statement": "A configuration or infrastructure change caused the stall.",
+   "service": "fivo-worker",
+   "category": "config_change",
+   "confidence": 0.02,
+   "verdict": "ruled_out",
+   "supporting": [],
+   "contradicting": [
+    {
+     "statement": "No config changes were recorded in the 29 hours before the incident.",
+     "evidence_ids": [
+      "config:config_changes:0001"
+     ]
+    }
+   ]
+  }
+ ],
+ "facts": [
+  {
+   "statement": "fivo-worker was deployed at 15:44:00Z (dep-0414, 'embeddings: clear the legacy import backlog in one pass'). It was the only deploy in the window, and no config changes were recorded.",
+   "evidence_ids": [
+    "deploy:fivo-worker:0001",
+    "config:config_changes:0001"
+   ]
+  },
+  {
+   "statement": "The change in embed_pending_receipts replaces chunked fetching and saving with a load-all and accumulate-all approach.",
+   "evidence_ids": [
+    "diff:fivo-worker:0001",
+    "diff:fivo-worker:0002"
+   ]
+  },
+  {
+   "statement": "Worker memory moved from about 243 MB to about 487\u2013499 MB at 15:52. Platform OOM kills (exit 137) repeat roughly every 35 seconds.",
+   "evidence_ids": [
+    "metric:fivo-worker:0001",
+    "log:fivo-worker:0057",
+    "log:fivo-worker:0041"
+   ]
+  },
+  {
+   "statement": "The embed task with the same job_id was redelivered about every 35 seconds starting 15:53:00.",
+   "evidence_ids": [
+    "log:fivo-worker:0051",
+    "log:fivo-worker:0056"
+   ]
+  },
+  {
+   "statement": "Worker throughput fell to 0 tasks/min from about 16:10, and queue depth rose to 170 by 16:48.",
+   "evidence_ids": [
+    "metric:fivo-worker:0003",
+    "metric:fivo-worker:0004"
+   ]
+  },
+  {
+   "statement": "The backlog is 2,600 processed receipts without embeddings. 37 receipts are in 'uploaded'.",
+   "evidence_ids": [
+    "db:receipts:0002",
+    "db:receipts:0001"
+   ]
+  },
+  {
+   "statement": "Before the deploy, process_receipt succeeded in about 9s and the worker had no errors.",
+   "evidence_ids": [
+    "log:fivo-worker:0007",
+    "logagg:fivo-worker:0001"
+   ]
+  }
+ ],
+ "assumptions": [
+  "Memory use scales with the number of pending receipts (about 2,600), because the new code reads all their text and vectors before saving. I did not see a heap profile.",
+  "Celery redelivers the unacknowledged embed task after each kill (late ack or visibility timeout). This is inferred from the repeated receipt of the same job_id.",
+  "The 15:44 SIGTERM and the 15:44 restart were the deploy rollout, not an OOM kill. The first OOM kill I saw was at 15:53:05."
+ ],
+ "recommended_actions": [
+  {
+   "action": "Roll back fivo-worker to 994ebf05, or hotfix `embed_pending_receipts` to a bounded batch loop (`iter_pending_receipt_ids(limit=64)` with save per batch).",
+   "rationale": "This removes the unbounded memory use that is crash-looping the worker.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "diff:fivo-worker:0002",
+    "metric:fivo-worker:0001"
+   ]
+  },
+  {
+   "action": "After the rollback, purge or revoke the redelivered embed_pending_receipts task from the Redis queue. Confirm that process_receipt drains the queue and that the 37 'uploaded' receipts reach 'processed'.",
+   "rationale": "A poison-pill redelivery can keep crashing the worker even after the code is fixed. The queue depth is 170 and growing.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "log:fivo-worker:0056",
+    "metric:fivo-worker:0004"
+   ]
+  },
+  {
+   "action": "Drain the 2,600-receipt embedding backlog in small batches with a memory-safe job, off the main worker or with a hard cap per run.",
+   "rationale": "The backlog is the trigger for the memory spike and still has to be processed.",
+   "priority": "soon",
+   "evidence_ids": [
+    "db:receipts:0002"
+   ]
+  },
+  {
+   "action": "Add a memory alert for the worker at 80% of the limit and an OOM-restart alert. Review the change for unbounded loads before it deploys. Give embed tasks a time and memory budget and separate queues from process_receipt.",
+   "rationale": "The crash loop ran for over 30 minutes before detection. Embedding work should not be able to starve user-facing receipt processing.",
+   "priority": "later",
+   "evidence_ids": [
+    "metric:fivo-worker:0002"
+   ]
+  }
+ ],
+ "missing_evidence": [
+  "No heap or per-task memory profile, so the exact allocation that exceeds the limit was not observed.",
+  "Celery configuration (acks_late, visibility timeout) was not inspected.",
+  "The log fetch at 15:44\u201315:58 was partial and truncated, so some lines were not read.",
+  "I did not check the API's own logs. Uploads succeed per the incident description, and the fault is on the worker side."
+ ],
+ "what_changed": {
+  "what_changed": "fivo-worker dep-0414 changed `embed_pending_receipts` from a bounded batch loop (limit 64) to an unbounded load of every pending receipt, with all vectors accumulated in memory.",
+  "changed_at": "2026-11-09T15:44:00Z",
+  "why_not_earlier": "The deploy landed at 15:44. The memory spike began at 15:52 and the first OOM kill was logged at 15:53:05, with the first embed task received at 15:53:00. That is the first beat run after the deploy that I saw. The old code only held 64 receipts at a time, so the 2,600-receipt backlog was harmless.",
+  "before": {
+   "statement": "Worker memory was steady at about 243 MB, with no errors. Receipts processed in about 9s and queue depth was 0.",
+   "evidence_ids": [
+    "metric:fivo-worker:0001",
+    "log:fivo-worker:0007",
+    "metric:fivo-worker:0004"
+   ]
+  },
+  "after": {
+   "statement": "Memory sat at about 487\u2013499 MB, with OOM kills every ~35s. Throughput fell to 0 tasks/min from 16:10, and queue depth reached 170 and kept growing.",
+   "evidence_ids": [
+    "metric:fivo-worker:0001",
+    "log:fivo-worker:0041",
+    "metric:fivo-worker:0003",
+    "metric:fivo-worker:0004"
+   ]
+  }
+ },
+ "changes_considered": [
+  {
+   "change": "fivo-worker deploy dep-0414, sha fdbd6e96 (prev 994ebf05): 'embeddings: clear the legacy import backlog in one pass'",
+   "when": "2026-11-09T15:44:00Z",
+   "timing": "",
+   "disposition": "cause",
+   "reason": "The diff introduces the unbounded in-memory load. Memory, OOM kills and the stall all begin within about 10 minutes of the deploy, on the first embed run.",
+   "evidence_ids": [
+    "deploy:fivo-worker:0001",
+    "diff:fivo-worker:0001",
+    "diff:fivo-worker:0002",
+    "metric:fivo-worker:0001",
+    "log:fivo-worker:0057"
+   ]
+  },
+  {
+   "change": "Configuration, environment variable, feature flag and infrastructure changes, 2026-11-08T12:00Z to 2026-11-09T17:00Z",
+   "when": "2026-11-09T15:00:00Z",
+   "timing": "",
+   "disposition": "ruled_out",
+   "reason": "None recorded in the window.",
+   "evidence_ids": [
+    "config:config_changes:0001"
+   ]
+  }
+ ],
+ "why_now_evidenced": true,
+ "citations": {
+  "cited": 52,
+  "invalid": 0,
+  "facts_demoted": 0
+ },
+ "meta": {
+  "system": "single_agent",
+  "termination": "agent finished",
+  "tool_calls": 18,
+  "tool_failures": 0,
+  "guardrail_rejections": 1,
+  "evidence_records": 81,
+  "llm_calls": 7,
+  "input_tokens": 154300,
+  "output_tokens": 6404,
+  "total_tokens": 160704,
+  "cost_usd": 0.1633,
+  "latency_s": 48.1
+ }
+}

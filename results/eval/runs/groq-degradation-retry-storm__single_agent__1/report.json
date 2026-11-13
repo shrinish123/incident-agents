@@ -1,0 +1,274 @@
+{
+ "status": "conclusive",
+ "summary": "The Groq LLM API degraded from about 11:00Z. Its client p95 latency went from about 490 ms to about 29 s, and its error rate went from 0 to about 59%. POST /transactions/quick-add is the only route that waits synchronously for the worker's `categorize_transaction` task, which calls Groq. Each Groq call times out after 30 s or returns 503, and the task retries, so the result does not arrive within the 8 s wait and the route returns 504. No deploy or config change in the prior day explains this. Mitigate by degrading quick-add gracefully (return 201 without the category), or by lowering the Groq timeout and adding a fallback. Then follow up with Groq.",
+ "root_cause": {
+  "service": "groq-llm",
+  "component": "Groq chat-completions API used by fivo-worker categorize_transaction, which POST /transactions/quick-add waits on",
+  "category": "dependency_failure",
+  "summary": "Groq began timing out (30 s) and returning 503s at about 11:00Z. The worker's categorize_transaction task kept retrying and never produced a result within the 8000 ms that quick-add waits. quick-add therefore returned 504 for most callers, while routes that do not wait on the worker stayed healthy."
+ },
+ "what_changed": {
+  "what_changed": "Upstream Groq API behaviour: latency and error rate jumped. There was no deploy or config change on our side.",
+  "changed_at": "2026-11-11T11:00:00Z",
+  "why_not_earlier": "The coupling (quick-add waits 8 s for a Groq-backed task) already existed. It only fails when Groq is slow, and Groq was healthy until 11:00Z.",
+  "before": {
+   "statement": "Groq client p95 latency was about 480-495 ms with a 0 error rate. quick-add returned 201 in every bucket from 10:30 to 10:50.",
+   "evidence_ids": [
+    "metric:groq-llm:0001",
+    "metric:groq-llm:0002",
+    "logagg:fivo-api:0001"
+   ]
+  },
+  "after": {
+   "statement": "Groq p95 latency was about 29 s (peak 29.2 s at 11:05) and the error rate about 0.59. Worker task p95 was pinned at 30000 ms. The worker logged Groq timeouts and 503s. quick-add returned 504 (8 at 11:00, 13 at 11:10) and its 201s dropped to zero in the 11:10 bucket.",
+   "evidence_ids": [
+    "metric:groq-llm:0001",
+    "metric:groq-llm:0002",
+    "metric:fivo-worker:0001",
+    "log:fivo-worker:0001",
+    "log:fivo-worker:0002",
+    "logagg:fivo-api:0001"
+   ]
+  }
+ },
+ "hypotheses": [
+  {
+   "id": "H1",
+   "rank": 1,
+   "statement": "Groq outage or degradation causes categorize_transaction to time out or fail and retry. quick-add's synchronous 8 s wait then expires and the route returns 504.",
+   "service": "groq-llm",
+   "category": "dependency_failure",
+   "confidence": 0.9,
+   "verdict": "most_likely",
+   "supporting": [
+    {
+     "statement": "Groq p95 latency rose from about 490 ms to about 29 s and the error rate to about 0.59, starting at 11:00Z.",
+     "evidence_ids": [
+      "metric:groq-llm:0001",
+      "metric:groq-llm:0002"
+     ]
+    },
+    {
+     "statement": "Worker warnings show Groq 30 s timeouts and 503s, plus a final error after retries at 11:27:55.",
+     "evidence_ids": [
+      "log:fivo-worker:0001",
+      "log:fivo-worker:0002",
+      "log:fivo-worker:0007"
+     ]
+    },
+    {
+     "statement": "The worker task p95 duration is pinned at the 30 s timeout from 11:05.",
+     "evidence_ids": [
+      "metric:fivo-worker:0001"
+     ]
+    },
+    {
+     "statement": "quick-add waits for the worker result for at most 8000 ms, then returns 504. The categorize task retries on UpstreamError.",
+     "evidence_ids": [
+      "code:fivo-api:0001",
+      "codehit:fivo-api:0002",
+      "code:fivo-worker:0001"
+     ]
+    },
+    {
+     "statement": "quick-add 504s began in the 11:00 bucket. Other routes keep returning 200/201/202.",
+     "evidence_ids": [
+      "logagg:fivo-api:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "The Groq client metrics come from our own worker, so they cannot separate a Groq-side problem from a network or egress problem. No Groq status page evidence was available.",
+     "evidence_ids": [
+      "metric:groq-llm:0001"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H2",
+   "rank": 2,
+   "statement": "A recent deploy or config change in fivo-api or fivo-worker caused the failure.",
+   "service": "fivo-api",
+   "category": "code_regression",
+   "confidence": 0.03,
+   "verdict": "ruled_out",
+   "supporting": [],
+   "contradicting": [
+    {
+     "statement": "There were no deploys in the 24 h before the incident.",
+     "evidence_ids": [
+      "deploy:deploys:0001"
+     ]
+    },
+    {
+     "statement": "There were no config changes in the 24 h before the incident.",
+     "evidence_ids": [
+      "config:config_changes:0001"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H3",
+   "rank": 3,
+   "statement": "Worker capacity or Redis queue problem. Two worker threads were saturated or the queue was backed up independently of Groq.",
+   "service": "fivo-worker",
+   "category": "resource_exhaustion",
+   "confidence": 0.07,
+   "verdict": "ruled_out",
+   "supporting": [
+    {
+     "statement": "Queue depth rose from 0 to about 27 after 11:05.",
+     "evidence_ids": [
+      "metric:fivo-worker:0002"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "Queue depth was 0 until 11:00 and only rose after Groq latency spiked, so it is a consequence: threads are tied up for 30 s per call. The Groq degradation preceded it.",
+     "evidence_ids": [
+      "metric:fivo-worker:0002",
+      "metric:groq-llm:0001"
+     ]
+    }
+   ]
+  }
+ ],
+ "facts": [
+  {
+   "statement": "quick-add returned 201 in every bucket from 10:30 to 10:50. It returned 504 (8 at 11:00, 13 at 11:10) once the incident began. Other routes continued to return 200/201/202.",
+   "evidence_ids": [
+    "logagg:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "Groq client p95 latency went from about 480-495 ms to about 29 s from 11:00-11:05. The Groq error rate went from 0 to about 0.59.",
+   "evidence_ids": [
+    "metric:groq-llm:0001",
+    "metric:groq-llm:0002"
+   ]
+  },
+  {
+   "statement": "The worker logged categorize_transaction retries with 'groq request timed out after 30s' and 'groq returned 503 Service Unavailable'. After retries were exhausted it logged an UpstreamError at 11:27:55.",
+   "evidence_ids": [
+    "log:fivo-worker:0001",
+    "log:fivo-worker:0002",
+    "log:fivo-worker:0007"
+   ]
+  },
+  {
+   "statement": "Worker task p95 duration was pinned at 30000 ms from 11:05, and queue depth grew from 0 to about 27.",
+   "evidence_ids": [
+    "metric:fivo-worker:0001",
+    "metric:fivo-worker:0002"
+   ]
+  },
+  {
+   "statement": "quick_add waits at most QUICK_ADD_WAIT_MS (default 8000) for the categorize job result. It raises 504 if the result is not ready. POST /transactions enqueues the job without waiting.",
+   "evidence_ids": [
+    "code:fivo-api:0001",
+    "codehit:fivo-api:0002"
+   ]
+  },
+  {
+   "statement": "categorize_transaction calls Groq with a 30 s default timeout. It retries up to 5 times with exponential countdown.",
+   "evidence_ids": [
+    "code:fivo-worker:0001",
+    "codehit:fivo-worker:0001"
+   ]
+  },
+  {
+   "statement": "There were no deploys and no config changes in the 24 h before the incident. No past incident matched 'groq'.",
+   "evidence_ids": [
+    "deploy:deploys:0001",
+    "config:config_changes:0001",
+    "incident:incidents:0001"
+   ]
+  }
+ ],
+ "assumptions": [
+  "The Groq degradation originates on Groq's side. Only client-side metrics from our worker were available, so a network or egress fault cannot be fully excluded.",
+  "The 8000 ms quick-add wait was the effective value in production. Only the code default was read and no env override was checked, although no config changes were recorded.",
+  "Queue growth after 11:05 is a consequence of the retries and 30 s calls occupying the two worker threads, not an independent cause."
+ ],
+ "recommended_actions": [
+  {
+   "action": "Make quick-add degrade gracefully: on categorisation timeout, return 201 with the transaction uncategorised and let categorisation finish asynchronously, instead of returning 504.",
+   "rationale": "The user-facing failure comes from a hard synchronous dependency on an external LLM.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "code:fivo-api:0001"
+   ]
+  },
+  {
+   "action": "Check Groq's status and our account for rate limits or quota. Consider a fallback model or provider, or a rules-based categoriser, and lower GROQ_TIMEOUT_S well below 30 s with fewer retries on the quick-add path.",
+   "rationale": "A 30 s timeout with up to 5 retries ties up the two worker threads and backs up the queue.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "metric:groq-llm:0001",
+    "code:fivo-worker:0001",
+    "metric:fivo-worker:0002"
+   ]
+  },
+  {
+   "action": "Give quick-add categorisation its own queue or priority, and add a circuit breaker on Groq. Alert on Groq client latency and error rate.",
+   "rationale": "Slow background tasks should not starve the interactive path, and the Groq degradation should be detected before users report it.",
+   "priority": "soon",
+   "evidence_ids": [
+    "metric:fivo-worker:0002",
+    "metric:groq-llm:0002"
+   ]
+  }
+ ],
+ "missing_evidence": [
+  "No Groq-side status or incident data, so the upstream root cause is not confirmed.",
+  "Production env values (QUICK_ADD_WAIT_MS, GROQ_TIMEOUT_S) were not checked directly.",
+  "The Groq query logs_count on fivo-api was partial and capped, so route counts are lower bounds.",
+  "No trace spans were inspected."
+ ],
+ "changes_considered": [
+  {
+   "change": "fivo-api and fivo-worker deploys, any service",
+   "when": "2026-11-10T10:00:00Z",
+   "timing": "",
+   "disposition": "ruled_out",
+   "reason": "No deploys were found in the 24 h before the incident.",
+   "evidence_ids": [
+    "deploy:deploys:0001"
+   ]
+  },
+  {
+   "change": "Configuration, env var, feature flag or infrastructure changes, any service",
+   "when": "2026-11-10T10:00:00Z",
+   "timing": "",
+   "disposition": "ruled_out",
+   "reason": "No config changes were found in the 24 h before the incident.",
+   "evidence_ids": [
+    "config:config_changes:0001"
+   ]
+  }
+ ],
+ "why_now_evidenced": true,
+ "citations": {
+  "cited": 48,
+  "invalid": 0,
+  "facts_demoted": 0
+ },
+ "meta": {
+  "system": "single_agent",
+  "termination": "agent finished",
+  "tool_calls": 19,
+  "tool_failures": 0,
+  "guardrail_rejections": 1,
+  "evidence_records": 30,
+  "llm_calls": 7,
+  "input_tokens": 139538,
+  "output_tokens": 6065,
+  "total_tokens": 145603,
+  "cost_usd": 0.1214,
+  "latency_s": 47.8
+ }
+}

@@ -1,0 +1,44 @@
+{
+ "scenario": "poison-receipt-requeue-loop",
+ "system": "single_agent",
+ "run": 1,
+ "tags": [
+  "misleading",
+  "multi_hop"
+ ],
+ "correct": false,
+ "accepted_as": "",
+ "service_match": true,
+ "category_match": false,
+ "conclusive": true,
+ "confidently_wrong": true,
+ "citation_validity": 1.0,
+ "citations": 64,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 1.0,
+ "key_evidence_collected": 1.0,
+ "reported": {
+  "service": "fivo-worker",
+  "category": "code_regression",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "fivo-worker",
+  "category": "data_issue"
+ },
+ "judge_score": 0.5,
+ "judge_reason": "The report correctly identifies receipt 4363, the 131-byte HEIC native decode segfault, and late-ack redelivery causing 219 restarts and starvation, but it categorizes the cause as a code regression from a HEIC-support commit rather than a data issue (truncated upload as the trigger).",
+ "tool_calls": 26,
+ "tool_failures": 0,
+ "guardrail_rejections": 1,
+ "llm_calls": 11,
+ "input_tokens": 275139,
+ "output_tokens": 8076,
+ "total_tokens": 283215,
+ "cost_usd": 0.1772,
+ "latency_s": 63.8,
+ "rounds": null,
+ "max_hops": null,
+ "termination": "agent finished"
+}

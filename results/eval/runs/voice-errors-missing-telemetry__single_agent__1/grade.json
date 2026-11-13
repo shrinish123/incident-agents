@@ -1,0 +1,44 @@
+{
+ "scenario": "voice-errors-missing-telemetry",
+ "system": "single_agent",
+ "run": 1,
+ "tags": [
+  "tool_failure",
+  "inconclusive_ok"
+ ],
+ "correct": true,
+ "accepted_as": "primary",
+ "service_match": true,
+ "category_match": true,
+ "conclusive": true,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 41,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 1.0,
+ "key_evidence_collected": 1.0,
+ "reported": {
+  "service": "bolna-voice",
+  "category": "dependency_failure",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "bolna-voice",
+  "category": "dependency_failure"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report identifies the Bolna voice provider API as a dependency failure (502s and 10s timeouts) with no deploys, and acknowledges that traces and client-side metrics are missing, matching the key's root cause and caveats.",
+ "tool_calls": 21,
+ "tool_failures": 2,
+ "guardrail_rejections": 1,
+ "llm_calls": 8,
+ "input_tokens": 170517,
+ "output_tokens": 6546,
+ "total_tokens": 177063,
+ "cost_usd": 0.1344,
+ "latency_s": 333.0,
+ "rounds": null,
+ "max_hops": null,
+ "termination": "agent finished"
+}

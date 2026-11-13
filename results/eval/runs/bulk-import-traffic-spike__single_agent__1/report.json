@@ -1,0 +1,289 @@
+{
+ "status": "conclusive",
+ "summary": "One client, user 137 on device cli-7f3a, started posting about 320 transactions a minute to POST /transactions at about 07:10Z. fivo-api's rate limiter is a single fixed one-minute window of 240 requests per minute (RATE_LIMIT_RPM) shared by every user on the instance. That traffic filled the window, so the limiter returned 429 to everyone else too. The 07:06 deploy only changed an insights prompt string and no config changed, so neither is the cause. Immediate action is to block or throttle user 137 and the cli-7f3a client. Longer term, the limiter needs to be per-user.",
+ "root_cause": {
+  "service": "fivo-api",
+  "component": "RateLimitMiddleware (app/middleware/ratelimit.py), a global fixed-window limiter with RATE_LIMIT_RPM=240, triggered by user 137's cli-7f3a bulk POST /transactions traffic",
+  "category": "traffic_change",
+  "summary": "User 137's device cli-7f3a (source=api) began a sustained burst of POST /transactions at about 07:10Z, around 1,600 requests per 5 minutes, which is about 320 per minute. The middleware counts all requests from all users in one per-instance window of 240 per minute and returns 429 once it is exceeded. The burst therefore consumed the whole budget, and about 25% of all requests, including other users' requests on other routes, got 429."
+ },
+ "hypotheses": [
+  {
+   "id": "H1",
+   "rank": 1,
+   "statement": "A single user's high-rate scripted POST /transactions traffic exhausted the global (not per-user) rate limit, so all users received 429.",
+   "service": "fivo-api",
+   "category": "traffic_change",
+   "confidence": 0.93,
+   "verdict": "most_likely",
+   "supporting": [
+    {
+     "statement": "User 137 accounts for 3736 of the 201s and 1347 of the 429s on POST /transactions between 07:08 and 07:30. Volume for this user jumps from 1 request in the 07:05 bucket to about 1,600 per 5 minutes from 07:15.",
+     "evidence_ids": [
+      "logagg:fivo-api:0003",
+      "logagg:fivo-api:0004"
+     ]
+    },
+    {
+     "statement": "The DB shows 7216 transactions from device cli-7f3a with source=api. All have unique idempotency keys and client_seq values, so this is not a retry loop. The merchants are synthetic-looking, spread evenly over 22 values.",
+     "evidence_ids": [
+      "db:transactions:0001",
+      "db:transactions:0002"
+     ]
+    },
+    {
+     "statement": "The limiter is one fixed 60-second window over all requests to the instance, at a default of 240 rpm, and it returns 429 with Retry-After: 30. Only /health is exempt.",
+     "evidence_ids": [
+      "code:fivo-api:0001",
+      "codehit:fivo-api:0002"
+     ]
+    },
+    {
+     "statement": "Other users and other routes (/summary, GET /transactions, /receipts) also received 429s, which fits a shared global counter.",
+     "evidence_ids": [
+      "logagg:fivo-api:0002",
+      "logagg:fivo-api:0003"
+     ]
+    },
+    {
+     "statement": "Normal traffic before 07:10 was about 45 to 80 requests per 5 minutes with no 429s. From 07:10, 429s were 92, then 443, 406, 445 and 458 per 5-minute bucket.",
+     "evidence_ids": [
+      "logagg:fivo-api:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "Both the 5-minute counts and the 07:10 to 07:20 route counts are partial or capped, so they are lower bounds.",
+     "evidence_ids": [
+      "logagg:fivo-api:0001"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H2",
+   "rank": 2,
+   "statement": "The 07:06 deploy (e951293) caused the 429s.",
+   "service": "fivo-api",
+   "category": "code_regression",
+   "confidence": 0.03,
+   "verdict": "ruled_out",
+   "supporting": [
+    {
+     "statement": "The deploy was 4 minutes before onset.",
+     "evidence_ids": [
+      "deploy:fivo-api:0001"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "The deploy changed one string in the /insights prompt and nothing else. It does not touch the rate limiter or /transactions.",
+     "evidence_ids": [
+      "changes:fivo-api:0001",
+      "diff:fivo-api:0001"
+     ]
+    },
+    {
+     "statement": "The excess load comes from one client on /transactions, not /insights.",
+     "evidence_ids": [
+      "logagg:fivo-api:0002",
+      "logagg:fivo-api:0003"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H3",
+   "rank": 3,
+   "statement": "A config change, such as a lowered RATE_LIMIT_RPM, caused the 429s.",
+   "service": "fivo-api",
+   "category": "config_change",
+   "confidence": 0.03,
+   "verdict": "ruled_out",
+   "supporting": [],
+   "contradicting": [
+    {
+     "statement": "No config changes were recorded in the 26 hours before the incident.",
+     "evidence_ids": [
+      "config:config_changes:0001"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H4",
+   "rank": 4,
+   "statement": "A downstream dependency failure (Redis, worker or DB) caused the 429s.",
+   "service": "fivo-api",
+   "category": "dependency_failure",
+   "confidence": 0.02,
+   "verdict": "ruled_out",
+   "supporting": [],
+   "contradicting": [
+    {
+     "statement": "The 429s are produced by the in-process middleware. Almost all requests that got through returned 201, with only one 500 seen. I did not check dependency metrics directly.",
+     "evidence_ids": [
+      "codehit:fivo-api:0001",
+      "logagg:fivo-api:0001"
+     ]
+    }
+   ]
+  }
+ ],
+ "facts": [
+  {
+   "statement": "429s on fivo-api began in the 07:10 bucket (92) and stayed at roughly 400 to 460 per 5 minutes. 201s rose from about 10 to about 1,170 per 5 minutes in the same period.",
+   "evidence_ids": [
+    "logagg:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "Between 07:10 and 07:20, POST /transactions had 1416 201s and 527 429s. Other routes got a few 429s.",
+   "evidence_ids": [
+    "logagg:fivo-api:0002"
+   ]
+  },
+  {
+   "statement": "User 137 is a free-plan user with 2 devices.",
+   "evidence_ids": [
+    "db:users:0001"
+   ]
+  },
+  {
+   "statement": "User 137's device cli-7f3a created 7216 transactions with source=api, from 07:14:00 to 07:44:47. The same user's normal ios-393d activity was 5 transactions.",
+   "evidence_ids": [
+    "db:transactions:0001"
+   ]
+  },
+  {
+   "statement": "The rate limiter is a global fixed window of 240 requests per minute for the whole instance.",
+   "evidence_ids": [
+    "code:fivo-api:0001",
+    "codehit:fivo-api:0002"
+   ]
+  },
+  {
+   "statement": "The only deploy in the window was dep-0414 at 07:06, an insights prompt change. No config changes were found.",
+   "evidence_ids": [
+    "deploy:fivo-api:0001",
+    "changes:fivo-api:0001",
+    "diff:fivo-api:0001",
+    "config:config_changes:0001"
+   ]
+  }
+ ],
+ "assumptions": [
+  "cli-7f3a is a script or bulk-import client (inferred from unique keys, evenly spread synthetic merchants and a steady rate). I did not confirm who runs it or whether it is authorized.",
+  "The 429s on other users' requests come from the shared counter, since the limiter has no per-user key. This is read from the code, not measured per user.",
+  "The roughly 25% 429 share is calculated from the partial 5-minute counts, so it is approximate.",
+  "The burst is still running as of 07:44:47, so I assume the incident is ongoing."
+ ],
+ "recommended_actions": [
+  {
+   "action": "Block or throttle user 137 and device cli-7f3a, for example revoke its API token, and contact the owner to find out what the client is doing.",
+   "rationale": "This single client is consuming the whole instance-wide rate budget.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "logagg:fivo-api:0003",
+    "db:transactions:0001"
+   ]
+  },
+  {
+   "action": "Replace the global fixed-window limiter with per-user or per-IP limits. Keep a separate, higher global ceiling for overload protection only.",
+   "rationale": "One noisy tenant should not cause 429s for everyone. Today any client sending more than 240 requests a minute locks out all users.",
+   "priority": "soon",
+   "evidence_ids": [
+    "code:fivo-api:0001"
+   ]
+  },
+  {
+   "action": "Review the roughly 7,200 transactions from cli-7f3a and delete or flag them if they are junk.",
+   "rationale": "The rows are in user 137's data and will skew that user's summaries and insights.",
+   "priority": "soon",
+   "evidence_ids": [
+    "db:transactions:0001",
+    "db:transactions:0002"
+   ]
+  },
+  {
+   "action": "Add alerting on per-user request share and on the 429 rate. Consider a limiter with a shared store, since the current counter is per process.",
+   "rationale": "This would have shown the source of the burst earlier.",
+   "priority": "later",
+   "evidence_ids": [
+    "logagg:fivo-api:0001"
+   ]
+  }
+ ],
+ "missing_evidence": [
+  "fivo-api metrics were not queried, so I did not check CPU, memory or latency on the 512 MB instance.",
+  "The identity and purpose of the cli-7f3a client (for example a user-agent or token) is not in the data I looked at.",
+  "The 429 log lines could not be fetched for 07:10 to 07:12 (log:fivo-api:0001 returned no matches), and the 5-minute counts are partial. The exact first-request time of the burst is therefore approximate, and the first transaction for cli-7f3a is at 07:14.",
+  "I did not check upstash-redis, neon-postgres or fivo-worker health directly."
+ ],
+ "what_changed": {
+  "what_changed": "A new high-volume client (user 137, device cli-7f3a, source=api) began a sustained burst of POST /transactions at about 07:10Z. It exhausted the instance-wide 240 rpm limit.",
+  "changed_at": "2026-11-11T07:10:00Z",
+  "why_not_earlier": "The global-limit design and the 240 rpm value were already in place and only matter once one client exceeds the budget. No earlier client sent that volume. I did not look at the limiter's history, so I cannot say how long the design has been this way.",
+  "before": {
+   "statement": "Traffic was about 45 to 80 requests per 5 minutes with no 429s, well under the 240 rpm global limit.",
+   "evidence_ids": [
+    "logagg:fivo-api:0001"
+   ]
+  },
+  "after": {
+   "statement": "User 137 sent about 1,600 requests per 5 minutes, and 429s ran at roughly 400 to 460 per 5 minutes for all users.",
+   "evidence_ids": [
+    "logagg:fivo-api:0004",
+    "logagg:fivo-api:0001",
+    "db:transactions:0001"
+   ]
+  }
+ },
+ "changes_considered": [
+  {
+   "change": "fivo-api deploy dep-0414, sha e951293b (prev 7bc71c84): insights prompt now also asks for a saving tip",
+   "when": "2026-11-11T07:06:00Z",
+   "timing": "",
+   "disposition": "ruled_out",
+   "reason": "Only app/routes/insights.py changed, by one prompt string. It does not touch the rate limiter or /transactions, and the 429 volume comes from one user posting to /transactions.",
+   "evidence_ids": [
+    "deploy:fivo-api:0001",
+    "changes:fivo-api:0001",
+    "diff:fivo-api:0001",
+    "logagg:fivo-api:0003"
+   ]
+  },
+  {
+   "change": "Configuration, env var, feature flag and infrastructure changes (all services)",
+   "when": "2026-11-10T06:00:00Z",
+   "timing": "",
+   "disposition": "ruled_out",
+   "reason": "No config changes were recorded between 2026-11-10T06:00Z and 2026-11-11T08:00Z.",
+   "evidence_ids": [
+    "config:config_changes:0001"
+   ]
+  }
+ ],
+ "why_now_evidenced": true,
+ "citations": {
+  "cited": 43,
+  "invalid": 0,
+  "facts_demoted": 0
+ },
+ "meta": {
+  "system": "single_agent",
+  "termination": "agent finished",
+  "tool_calls": 18,
+  "tool_failures": 0,
+  "guardrail_rejections": 0,
+  "evidence_records": 25,
+  "llm_calls": 7,
+  "input_tokens": 118380,
+  "output_tokens": 6432,
+  "total_tokens": 124812,
+  "cost_usd": 0.1318,
+  "latency_s": 58.9
+ }
+}

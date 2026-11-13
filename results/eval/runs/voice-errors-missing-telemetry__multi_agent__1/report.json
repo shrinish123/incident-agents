@@ -1,0 +1,404 @@
+{
+ "status": "inconclusive",
+ "summary": "From about 13:19:55 UTC on 2026-11-09, POST /voice/call on fivo-api began failing: 11 x 502 and 11 x 504 over 13:10-14:00, against 57 x 202 (partial counts are lower bounds). No deploys, config or flag changes were recorded (07:00-14:00, and none mentioning bolna 12:00-14:00). All failures happen inside the outbound bolna call: 502s take about 0.8-1.06 s with 'bolna upstream error: 502 Bad Gateway', and 504s hit the 10 s client timeout. Best candidate is the Bolna side or the path to it (H1, with H5 not separable), but Bolna's health was never observed (no logs, metrics or traces) and the cause is reached by elimination only. Memory, CPU, restarts, Redis/worker queue and per-user data issues were ruled out.",
+ "root_cause": {
+  "service": "bolna-voice",
+  "component": "outbound call from fivo-api bolna.start_call (POST /voice/call), or the network/gateway path to Bolna",
+  "category": "dependency_failure",
+  "summary": "The failing requests spend their time in the single httpx.post to Bolna (10 s timeout, no retry), which maps 5xx responses to 502 and timeouts to 504. Whether Bolna itself or a gateway/egress path in front of it is at fault is not established. The trigger and why it began at about 13:15-13:20 are unevidenced."
+ },
+ "hypotheses": [
+  {
+   "id": "H1",
+   "rank": 1,
+   "statement": "bolna-voice is degraded, so fivo-api's outbound call returns 502 and times out (504) only on POST /voice/call. The rate/quota-limit variant fits poorly.",
+   "service": "bolna-voice",
+   "category": "dependency_failure",
+   "confidence": 0.4,
+   "verdict": "most_likely",
+   "supporting": [
+    {
+     "statement": "Only /voice/call has error-level lines; the code can produce 502/504 only from the bolna call.",
+     "evidence_ids": [
+      "logagg:fivo-api:0003",
+      "code:fivo-api:0001",
+      "code:fivo-api:0002",
+      "code:fivo-api:0003"
+     ]
+    },
+    {
+     "statement": "504s took about 10.01 s and 502s about 0.8-1.06 s, while 202s took 227-519 ms; failed voice_calls rows match.",
+     "evidence_ids": [
+      "log:fivo-api:0005",
+      "log:fivo-api:0006",
+      "log:fivo-api:0009",
+      "db:voice_calls:0001"
+     ]
+    },
+    {
+     "statement": "Failures occur at about 1 in-flight request, interleaved with fast 202s, so not fivo-api concurrency or a total outage.",
+     "evidence_ids": [
+      "logagg:fivo-api:0007",
+      "log:fivo-api:0014",
+      "log:fivo-api:0018",
+      "log:fivo-api:0019"
+     ]
+    },
+    {
+     "statement": "Error rate left baseline at 13:20 and p95 stepped up at 13:35.",
+     "evidence_ids": [
+      "metric:fivo-api:0007",
+      "metric:fivo-api:0006"
+     ]
+    },
+    {
+     "statement": "No deploys or config changes recorded, including for bolna.",
+     "evidence_ids": [
+      "deploy:deploys:0001",
+      "config:config_changes:0001",
+      "config:bolna-voice:0001",
+      "config:config_changes:0002"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "Bolna has no logs, metrics or traces; its health was never observed.",
+     "evidence_ids": [
+      "logagg:bolna-voice:0001",
+      "topology:bolna-voice:0001"
+     ]
+    },
+    {
+     "statement": "A quota or rate limit would likely surface as 429 and then 500 via raise_for_status, and no 500s were logged.",
+     "evidence_ids": [
+      "code:fivo-api:0001",
+      "logagg:fivo-api:0003"
+     ]
+    },
+    {
+     "statement": "Request rate fell from about 13.4/min to about 9.4/min, so no load rise explains a Bolna-side limit.",
+     "evidence_ids": [
+      "metric:fivo-api:0005"
+     ]
+    },
+    {
+     "statement": "p95 latency stayed near normal until 13:30, which weakens a gradually worsening upstream story.",
+     "evidence_ids": [
+      "metric:fivo-api:0006"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H5",
+   "rank": 2,
+   "statement": "The fault is on the path between fivo-api and Bolna (egress, NAT, gateway/proxy), not in Bolna's service.",
+   "service": "fivo-api",
+   "category": "infrastructure",
+   "confidence": 0.12,
+   "verdict": "possible",
+   "supporting": [
+    {
+     "statement": "The 502 text shows only that a 502 was received, and headers are discarded, so the sender is unknown. A non-timeout connection error would surface as 500, so the 502s were a 5xx status received from some hop.",
+     "evidence_ids": [
+      "code:fivo-api:0001",
+      "code:fivo-api:0003"
+     ]
+    },
+    {
+     "statement": "Env-level proxy settings cannot be excluded from code (httpx trust_env).",
+     "evidence_ids": [
+      "codehit:fivo-api:0003"
+     ]
+    }
+   ],
+   "contradicting": [
+    {
+     "statement": "anthropic-llm and r2-storage show no errors or latency rise, against an instance-wide egress fault.",
+     "evidence_ids": [
+      "metric:anthropic-llm:0001",
+      "metric:anthropic-llm:0002",
+      "metric:r2-storage:0001",
+      "metric:r2-storage:0002"
+     ]
+    },
+    {
+     "statement": "The code default BOLNA_BASE_URL is a direct host; the deployed value was not seen.",
+     "evidence_ids": [
+      "code:fivo-api:0004"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H2",
+   "rank": 3,
+   "statement": "The single 512 MB fivo-api instance is exhausted.",
+   "service": "fivo-api",
+   "category": "resource_exhaustion",
+   "confidence": 0.02,
+   "verdict": "ruled_out",
+   "supporting": [],
+   "contradicting": [
+    {
+     "statement": "Memory was about 201-207 MB of 512 MB, CPU fell after 13:10, restarts were 0, and request rate fell.",
+     "evidence_ids": [
+      "metric:fivo-api:0001",
+      "metric:fivo-api:0002",
+      "metric:fivo-api:0003",
+      "metric:fivo-api:0005"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H3",
+   "rank": 4,
+   "statement": "The Redis queue handoff to fivo-worker is failing or backing up.",
+   "service": "upstash-redis",
+   "category": "dependency_failure",
+   "confidence": 0.02,
+   "verdict": "ruled_out",
+   "supporting": [],
+   "contradicting": [
+    {
+     "statement": "Queue depth and worker failure rate were 0; Redis was at about 46% of its daily limit with no rate change; the worker kept logging normally; no fivo-api log mentions redis.",
+     "evidence_ids": [
+      "metric:fivo-worker:0001",
+      "metric:fivo-worker:0002",
+      "metric:upstash-redis:0001",
+      "metric:upstash-redis:0002",
+      "logagg:fivo-worker:0001",
+      "logagg:fivo-api:0006"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "H4",
+   "rank": 5,
+   "statement": "A data or input subset (particular users, reminders or phone numbers) makes some calls fail.",
+   "service": "fivo-api",
+   "category": "data_issue",
+   "confidence": 0.02,
+   "verdict": "ruled_out",
+   "supporting": [],
+   "contradicting": [
+    {
+     "statement": "18 of 37 users failed and 13 had both outcomes; the same user succeeds and fails within minutes.",
+     "evidence_ids": [
+      "db:voice_calls:0002",
+      "log:fivo-api:0014",
+      "log:fivo-api:0001",
+      "log:fivo-api:0005",
+      "log:fivo-api:0019"
+     ]
+    },
+    {
+     "statement": "Onset was abrupt; only 1 failed call from 12:00 to 13:10.",
+     "evidence_ids": [
+      "db:voice_calls:0003"
+     ]
+    }
+   ]
+  }
+ ],
+ "facts": [
+  {
+   "statement": "POST /voice/call returned 57 x 202, 11 x 502 and 11 x 504 over 13:10-14:00. All 22 error-level lines are on /voice/call.",
+   "evidence_ids": [
+    "logagg:fivo-api:0004",
+    "logagg:fivo-api:0003"
+   ]
+  },
+  {
+   "statement": "22 failed voice_calls rows carry bolna error text and have no provider_call_id. The first failure in the window is at 13:19:55.",
+   "evidence_ids": [
+    "db:voice_calls:0001"
+   ]
+  },
+  {
+   "statement": "No deploys or config/flag changes were recorded for any service 07:00-14:00; none mentioning bolna 12:00-14:00.",
+   "evidence_ids": [
+    "deploy:deploys:0001",
+    "config:config_changes:0001",
+    "config:config_changes:0002"
+   ]
+  },
+  {
+   "statement": "bolna.start_call uses one httpx.post with a 10 s default timeout and no retry; timeouts map to 504 and 5xx responses to 502.",
+   "evidence_ids": [
+    "code:fivo-api:0001",
+    "code:fivo-api:0003"
+   ]
+  },
+  {
+   "statement": "The 502 handling keeps only status and reason phrase; headers and body are not logged.",
+   "evidence_ids": [
+    "code:fivo-api:0001"
+   ]
+  },
+  {
+   "statement": "p95 latency jumped at 13:35 to about 5-9 s, and error_rate left baseline at 13:20.",
+   "evidence_ids": [
+    "metric:fivo-api:0006",
+    "metric:fivo-api:0007"
+   ]
+  },
+  {
+   "statement": "bolna-voice returned no log lines and no client-side metrics are collected for it.",
+   "evidence_ids": [
+    "logagg:bolna-voice:0001",
+    "topology:bolna-voice:0001"
+   ]
+  },
+  {
+   "statement": "Memory, CPU, restarts, queue depth and other outbound host metrics show no problem.",
+   "evidence_ids": [
+    "metric:fivo-api:0001",
+    "metric:fivo-api:0003",
+    "metric:fivo-worker:0001",
+    "metric:anthropic-llm:0001",
+    "metric:r2-storage:0001"
+   ]
+  }
+ ],
+ "assumptions": [
+  "The code at main is what runs; not verified.",
+  "BOLNA_TIMEOUT_S and BOLNA_BASE_URL are not overridden in the environment; not verified.",
+  "No platform, egress, Bolna-side or credential changes occurred; the change records only cover deploys and config/flags.",
+  "The trigger (a Bolna-side or path fault starting about 13:15-13:20) is assumed by elimination.",
+  "Several counts come from partial or capped results and are lower bounds."
+ ],
+ "recommended_actions": [
+  {
+   "action": "Check Bolna's status page, incident feed, and account concurrency/quota usage, and ask Bolna support about 502s and timeouts on our API key since about 13:19 UTC.",
+   "rationale": "Bolna's health is the unobserved core question; no tool reached it.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "topology:bolna-voice:0001",
+    "logagg:bolna-voice:0001"
+   ]
+  },
+  {
+   "action": "Confirm the runtime values of BOLNA_BASE_URL, BOLNA_TIMEOUT_S, HTTPS_PROXY and HTTP_PROXY on the instance, and that main is the running code.",
+   "rationale": "Environment drift or a proxy would point to H5 and is unchecked.",
+   "priority": "immediate",
+   "evidence_ids": [
+    "code:fivo-api:0004",
+    "codehit:fivo-api:0003"
+   ]
+  },
+  {
+   "action": "Re-run trace searches for 6a239cc311824309 and 350d8a2d4446bcb5 once the ingest backlog clears and compare DNS, connect, TLS and TTFB for the bolna span between 202 and 502/504 requests.",
+   "rationale": "This would separate Bolna from the path to it.",
+   "priority": "soon",
+   "evidence_ids": [
+    "log:fivo-api:0005",
+    "log:fivo-api:0006"
+   ]
+  },
+  {
+   "action": "Log the response headers (Server, Via) and body of 5xx from Bolna; add a bounded retry for 5xx and timeouts.",
+   "rationale": "Headers are currently discarded; no retry exists, so each transient fault becomes a user-visible failure.",
+   "priority": "soon",
+   "evidence_ids": [
+    "code:fivo-api:0001"
+   ]
+  },
+  {
+   "action": "Add client-side latency and error metrics for the Bolna call and alert on /voice/call 5xx share.",
+   "rationale": "No Bolna metrics exist; error_rate rose from 13:20 without a dedicated signal.",
+   "priority": "later",
+   "evidence_ids": [
+    "topology:bolna-voice:0001",
+    "metric:fivo-api:0007"
+   ]
+  }
+ ],
+ "missing_evidence": [
+  "Bolna status page, incident feed, account concurrency and quota usage (no tool available).",
+  "Span-level traces (trace store down with 'ingest backlog').",
+  "Response headers of the 502s (not logged).",
+  "Runtime values of BOLNA_BASE_URL, BOLNA_TIMEOUT_S and proxy variables; confirmation that main is the running code.",
+  "Phone and reminder attributes (not in logs or schema); the users join was rejected.",
+  "Full 502/504 log lines outside the sampled 13:30-13:45 window; several counts are partial.",
+  "Explanation for the single failed call before 13:10 and the 1.4% error blip at 13:00."
+ ],
+ "what_changed": {},
+ "changes_considered": [],
+ "why_now_evidenced": false,
+ "citations": {
+  "cited": 75,
+  "invalid": 0,
+  "facts_demoted": 0
+ },
+ "meta": {
+  "system": "multi_agent",
+  "termination": "round limit reached",
+  "rounds": 3,
+  "hypotheses": 5,
+  "steps": 16,
+  "steps_failed": 0,
+  "max_hops": 6,
+  "tool_calls": 83,
+  "tool_failures": 8,
+  "guardrail_rejections": 4,
+  "evidence_records": 72,
+  "dropped_citations": 0,
+  "changes_on_record": 0,
+  "changes_unexamined": 0,
+  "operator_notes": 0,
+  "llm_calls": 68,
+  "input_tokens": 874947,
+  "output_tokens": 65153,
+  "total_tokens": 940100,
+  "cost_usd": 1.5133,
+  "latency_s": 1181.0,
+  "by_agent": {
+   "dependency": {
+    "calls": 18,
+    "tokens": 228137,
+    "cost_usd": 0.2631,
+    "model": "claude-sonnet-5-5"
+   },
+   "observability": {
+    "calls": 28,
+    "tokens": 289853,
+    "cost_usd": 0.3056,
+    "model": "claude-sonnet-5-5"
+   },
+   "reasoning": {
+    "calls": 4,
+    "tokens": 109597,
+    "cost_usd": 0.3936,
+    "model": "claude-sonnet-5-5"
+   },
+   "data": {
+    "calls": 6,
+    "tokens": 60219,
+    "cost_usd": 0.0398,
+    "model": "claude-sonnet-5-5"
+   },
+   "code": {
+    "calls": 8,
+    "tokens": 109662,
+    "cost_usd": 0.0943,
+    "model": "claude-sonnet-5-5"
+   },
+   "critic": {
+    "calls": 3,
+    "tokens": 102589,
+    "cost_usd": 0.2911,
+    "model": "claude-sonnet-5-5"
+   },
+   "reporting": {
+    "calls": 1,
+    "tokens": 40043,
+    "cost_usd": 0.1258,
+    "model": "claude-sonnet-5-5"
+   }
+  }
+ }
+}

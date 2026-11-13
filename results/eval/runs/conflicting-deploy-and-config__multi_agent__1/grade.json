@@ -1,0 +1,44 @@
+{
+ "scenario": "conflicting-deploy-and-config",
+ "system": "multi_agent",
+ "run": 1,
+ "tags": [
+  "conflicting",
+  "misleading"
+ ],
+ "correct": true,
+ "accepted_as": "primary",
+ "service_match": true,
+ "category_match": true,
+ "conclusive": true,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 77,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 1.0,
+ "key_evidence_collected": 1.0,
+ "reported": {
+  "service": "fivo-api",
+  "category": "config_change",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "fivo-api",
+  "category": "config_change"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report identifies cfg-0139 lowering ANTHROPIC_TIMEOUT_S on fivo-api from 20 to 2 as the cause, with slow Anthropic calls timing out into 504s, and correctly rules out dep-0414, matching the key.",
+ "tool_calls": 29,
+ "tool_failures": 0,
+ "guardrail_rejections": 3,
+ "llm_calls": 29,
+ "input_tokens": 307360,
+ "output_tokens": 27955,
+ "total_tokens": 335315,
+ "cost_usd": 0.6011,
+ "latency_s": 192.6,
+ "rounds": 1,
+ "max_hops": 3,
+ "termination": "accepted"
+}

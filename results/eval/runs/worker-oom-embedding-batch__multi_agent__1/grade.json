@@ -1,0 +1,43 @@
+{
+ "scenario": "worker-oom-embedding-batch",
+ "system": "multi_agent",
+ "run": 1,
+ "tags": [
+  "multi_hop"
+ ],
+ "correct": true,
+ "accepted_as": "primary",
+ "service_match": true,
+ "category_match": true,
+ "conclusive": true,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 95,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 0.8,
+ "key_evidence_collected": 0.8,
+ "reported": {
+  "service": "fivo-worker",
+  "category": "code_regression",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "fivo-worker",
+  "category": "code_regression"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report identifies the same cause as the key: deploy dep-0414 removed batching in embed_pending_receipts, loading ~2,600 receipts at once, which exceeded the 512 MB limit, and the redelivered job on each boot produced a restart loop that stalled receipt processing.",
+ "tool_calls": 50,
+ "tool_failures": 0,
+ "guardrail_rejections": 0,
+ "llm_calls": 38,
+ "input_tokens": 472459,
+ "output_tokens": 35924,
+ "total_tokens": 508383,
+ "cost_usd": 0.7526,
+ "latency_s": 928.5,
+ "rounds": 1,
+ "max_hops": 3,
+ "termination": "accepted"
+}

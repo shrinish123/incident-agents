@@ -1,0 +1,44 @@
+{
+ "scenario": "worker-regression-with-log-failures",
+ "system": "multi_agent",
+ "run": 1,
+ "tags": [
+  "tool_failure",
+  "multi_hop"
+ ],
+ "correct": true,
+ "accepted_as": "primary",
+ "service_match": true,
+ "category_match": true,
+ "conclusive": true,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 86,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 1.0,
+ "key_evidence_collected": 1.0,
+ "reported": {
+  "service": "fivo-worker",
+  "category": "code_regression",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "fivo-worker",
+  "category": "code_regression"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report names the same root cause as the key: deploy dep-0414 (732a2a8) added an unguarded ZoneInfo(merchant_tz) in time_features, which raises TypeError for NULL-tz manual rows, and quick-add turns the failed result into a 500.",
+ "tool_calls": 50,
+ "tool_failures": 1,
+ "guardrail_rejections": 2,
+ "llm_calls": 43,
+ "input_tokens": 530273,
+ "output_tokens": 46883,
+ "total_tokens": 577156,
+ "cost_usd": 0.9936,
+ "latency_s": 807.4,
+ "rounds": 2,
+ "max_hops": 6,
+ "termination": "accepted"
+}

@@ -1,0 +1,43 @@
+{
+ "scenario": "migration-dropped-index",
+ "system": "single_agent",
+ "run": 1,
+ "tags": [
+  "multi_hop"
+ ],
+ "correct": true,
+ "accepted_as": "primary",
+ "service_match": true,
+ "category_match": true,
+ "conclusive": true,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 67,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 0.8,
+ "key_evidence_collected": 0.8,
+ "reported": {
+  "service": "fivo-api",
+  "category": "code_regression",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "fivo-api",
+  "category": "code_regression"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report names the same root cause as the key: deploy dep-0414 (sha 200f96f7) ran migration 0007, which dropped ix_transactions_user_created, so the user_id-filtered /transactions and /summary queries slowed from milliseconds to seconds.",
+ "tool_calls": 20,
+ "tool_failures": 0,
+ "guardrail_rejections": 2,
+ "llm_calls": 7,
+ "input_tokens": 117009,
+ "output_tokens": 6905,
+ "total_tokens": 123914,
+ "cost_usd": 0.1207,
+ "latency_s": 63.3,
+ "rounds": null,
+ "max_hops": null,
+ "termination": "agent finished"
+}

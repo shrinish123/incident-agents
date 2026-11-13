@@ -1,0 +1,43 @@
+{
+ "scenario": "migration-dropped-index",
+ "system": "multi_agent",
+ "run": 1,
+ "tags": [
+  "multi_hop"
+ ],
+ "correct": true,
+ "accepted_as": "acceptable",
+ "service_match": false,
+ "category_match": true,
+ "conclusive": true,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 105,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 1.0,
+ "key_evidence_collected": 1.0,
+ "reported": {
+  "service": "neon-postgres",
+  "category": "code_regression",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "fivo-api",
+  "category": "code_regression"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report identifies migration 0007 in deploy dep-0414 (200f96f) dropping ix_transactions_user_created, causing sequential scans on the transactions queries and higher DB CPU, which matches the key; the neon-postgres service attribution is an accepted alternative.",
+ "tool_calls": 61,
+ "tool_failures": 0,
+ "guardrail_rejections": 3,
+ "llm_calls": 49,
+ "input_tokens": 650187,
+ "output_tokens": 47485,
+ "total_tokens": 697672,
+ "cost_usd": 1.1763,
+ "latency_s": 318.6,
+ "rounds": 2,
+ "max_hops": 6,
+ "termination": "accepted"
+}

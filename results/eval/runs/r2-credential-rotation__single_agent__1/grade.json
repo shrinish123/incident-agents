@@ -1,0 +1,44 @@
+{
+ "scenario": "r2-credential-rotation",
+ "system": "single_agent",
+ "run": 1,
+ "tags": [
+  "conflicting",
+  "multi_hop"
+ ],
+ "correct": true,
+ "accepted_as": "primary",
+ "service_match": true,
+ "category_match": true,
+ "conclusive": true,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 43,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 0.8,
+ "key_evidence_collected": 0.8,
+ "reported": {
+  "service": "fivo-worker",
+  "category": "config_change",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "fivo-worker",
+  "category": "config_change"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report identifies the same root cause: the R2 key rotation (cfg-0139) was applied to fivo-api but not to fivo-worker's environment, and after the grace period ended the worker's GetObject calls returned 403 while uploads through the api kept working.",
+ "tool_calls": 11,
+ "tool_failures": 0,
+ "guardrail_rejections": 1,
+ "llm_calls": 6,
+ "input_tokens": 99285,
+ "output_tokens": 5200,
+ "total_tokens": 104485,
+ "cost_usd": 0.098,
+ "latency_s": 44.9,
+ "rounds": null,
+ "max_hops": null,
+ "termination": "agent finished"
+}

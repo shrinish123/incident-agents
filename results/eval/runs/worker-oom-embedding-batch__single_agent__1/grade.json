@@ -1,0 +1,43 @@
+{
+ "scenario": "worker-oom-embedding-batch",
+ "system": "single_agent",
+ "run": 1,
+ "tags": [
+  "multi_hop"
+ ],
+ "correct": true,
+ "accepted_as": "primary",
+ "service_match": true,
+ "category_match": true,
+ "conclusive": true,
+ "confidently_wrong": false,
+ "citation_validity": 1.0,
+ "citations": 52,
+ "facts_demoted": 0,
+ "why_now_evidenced": true,
+ "key_evidence_recall": 0.8,
+ "key_evidence_collected": 0.8,
+ "reported": {
+  "service": "fivo-worker",
+  "category": "code_regression",
+  "status": "conclusive"
+ },
+ "expected": {
+  "service": "fivo-worker",
+  "category": "code_regression"
+ },
+ "judge_score": 1.0,
+ "judge_reason": "The report identifies the same cause as the key: deploy dep-0414 changed embed_pending_receipts to load all ~2600 pending receipts at once, which OOM-kills the 512 MB worker, and redelivery of the task after each kill produces a restart loop that starves receipt processing.",
+ "tool_calls": 18,
+ "tool_failures": 0,
+ "guardrail_rejections": 1,
+ "llm_calls": 7,
+ "input_tokens": 154300,
+ "output_tokens": 6404,
+ "total_tokens": 160704,
+ "cost_usd": 0.1633,
+ "latency_s": 48.1,
+ "rounds": null,
+ "max_hops": null,
+ "termination": "agent finished"
+}
